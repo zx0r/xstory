@@ -363,6 +363,29 @@ fn format_duration(duration_ms: u32) -> String {
     }
 }
 
+fn format_exit_status(exit: i32) -> (String, Style) {
+    if exit == 0 {
+        ("0 (ok)".to_owned(), Style::default().fg(Color::DarkGray))
+    } else {
+        let label = match exit {
+            1 => "failed",
+            2 => "misuse / syntax error",
+            126 => "permission denied",
+            127 => "command not found",
+            130 => "interrupted (SIGINT)",
+            137 => "killed (SIGKILL)",
+            143 => "terminated (SIGTERM)",
+            _ if exit < 0 => "abnormal termination",
+            _ if (128..=192).contains(&exit) => "interrupted by signal",
+            _ => "failed",
+        };
+        (
+            format!("{exit} ({label})"),
+            Style::default().fg(Color::Yellow),
+        )
+    }
+}
+
 // ── Frame Rendering ──────────────────────────────────────────────
 
 fn build_highlighted_spans<'a>(
@@ -479,15 +502,13 @@ pub fn render_frame(
                 line_spans.push(Span::raw("  "));
             }
 
-            // Exit code status marker: only errors are highlighted to eliminate visual noise
-            if exit_code != 0 {
-                line_spans.push(Span::styled("✘ ", Style::default().fg(Color::Red)));
-            } else {
-                line_spans.push(Span::raw("  "));
-            }
-
-            // Command syntax spans
+            // Command syntax spans: failed/interrupted commands are dimmed to DarkGray
             let mut highlighted = build_highlighted_spans(cmd, spans_syntax, dash.theme);
+            if exit_code != 0 {
+                for s in &mut highlighted {
+                    s.style = Style::default().fg(Color::DarkGray);
+                }
+            }
             if is_selected {
                 for s in &mut highlighted {
                     s.style = s.style.add_modifier(Modifier::BOLD);
@@ -527,18 +548,14 @@ pub fn render_frame(
         ]));
 
         // Header line 2: stats
-        let exit_style = if exit == 0 {
-            Style::default().fg(Color::Green)
-        } else {
-            Style::default().fg(Color::Red)
-        };
+        let (exit_str, exit_style) = format_exit_status(exit);
         preview_lines.push(Line::from(vec![
             Span::styled("  Time: ", Style::default().fg(Color::DarkGray)),
             Span::raw(format!("{rel_time} ago  ")),
             Span::styled("Duration: ", Style::default().fg(Color::DarkGray)),
             Span::raw(format!("{dur_str}  ")),
             Span::styled("Exit: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{exit}"), exit_style),
+            Span::styled(exit_str, exit_style),
         ]));
 
         // Separator
@@ -939,5 +956,22 @@ mod tests {
         terminal.draw(|f| {
             render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache);
         }).expect("draw");
+    }
+
+    #[test]
+    fn exit_status_formatting() {
+        let (zero_str, zero_style) = format_exit_status(0);
+        assert_eq!(zero_str, "0 (ok)");
+        assert_eq!(zero_style.fg, Some(Color::DarkGray));
+
+        let (fail_str, fail_style) = format_exit_status(1);
+        assert_eq!(fail_str, "1 (failed)");
+        assert_eq!(fail_style.fg, Some(Color::Yellow));
+
+        let (sigint_str, _) = format_exit_status(130);
+        assert_eq!(sigint_str, "130 (interrupted (SIGINT))");
+
+        let (neg_str, _) = format_exit_status(-1);
+        assert_eq!(neg_str, "-1 (abnormal termination)");
     }
 }
