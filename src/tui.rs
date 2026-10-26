@@ -4,10 +4,10 @@
 use std::io::Write;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::arena::{Arena, Config, Scope, Theme};
@@ -363,6 +363,20 @@ fn format_duration(duration_ms: u32) -> String {
     }
 }
 
+fn abbreviate_path(path: &str) -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        if path == home {
+            return "~".to_owned();
+        }
+        if let Some(stripped) = path.strip_prefix(&home)
+            && stripped.starts_with('/')
+        {
+            return format!("~{stripped}");
+        }
+    }
+    path.to_owned()
+}
+
 fn format_exit_status(exit: i32) -> (String, Style) {
     if exit == 0 {
         ("0 (ok)".to_owned(), Style::default().fg(Color::DarkGray))
@@ -448,36 +462,34 @@ pub fn render_frame(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),       // Search input
-            Constraint::Percentage(55),  // History list
-            Constraint::Percentage(45),  // Preview
-            Constraint::Length(1),       // Footer
+            Constraint::Length(1),       // 0: Top Action buttons: [Esc] Exit   [^G] Scope   [↵] Run   [Tab] Edit
+            Constraint::Min(3),          // 1: History list
+            Constraint::Length(8),       // 2: Preview box [Date] [path]
+            Constraint::Length(3),       // 3: Search input (bottom) [G] [111/111]
         ])
         .split(area);
 
-    // 1. Search Query Box
-    let scope_label = match dash.scope {
-        Scope::Global => "Global",
-        Scope::Local => "Local",
-    };
-    let total_matched = dash.result.indices.len();
-    let query_title = format!(" Search [{scope_label}: {total_matched}/{}] ", dash.dedup_total);
-    let query_block = Block::default()
-        .borders(Borders::ALL)
-        .title(query_title)
-        .border_style(Style::default().fg(Color::Cyan));
+    // 0. Top Action Buttons (centered, DarkGray)
+    let items = [
+        ("[Esc]", " Exit"),
+        ("[^G]", " Scope"),
+        ("[↵]", " Run"),
+        ("[Tab]", " Edit"),
+    ];
+    let mut header_spans = Vec::new();
+    for (i, (key, desc)) in items.iter().enumerate() {
+        if i > 0 {
+            header_spans.push(Span::raw("   "));
+        }
+        header_spans.push(Span::styled(*key, Style::default().fg(Color::DarkGray)));
+        header_spans.push(Span::styled(*desc, Style::default().fg(Color::DarkGray)));
+    }
+    f.render_widget(
+        Line::from(header_spans).alignment(Alignment::Center),
+        chunks[0],
+    );
 
-    let query_text = format!("> {}", dash.query);
-    let query_widget = Paragraph::new(query_text).block(query_block);
-    f.render_widget(query_widget, chunks[0]);
-
-    // Position hardware cursor
-    #[allow(clippy::cast_possible_truncation)]
-    let cursor_x = (chunks[0].x + 3 + dash.cursor as u16).min(chunks[0].x + chunks[0].width.saturating_sub(2));
-    let cursor_y = chunks[0].y + 1;
-    f.set_cursor_position((cursor_x, cursor_y));
-
-    // 2. History List
+    // 1. History List
     let history_inner_height = chunks[1].height.saturating_sub(2) as usize;
     let mut history_lines = Vec::with_capacity(history_inner_height);
 
@@ -524,41 +536,54 @@ pub fn render_frame(
 
     let history_block = Block::default()
         .borders(Borders::ALL)
-        .title(" History ")
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::DarkGray));
     let history_widget = Paragraph::new(history_lines).block(history_block);
     f.render_widget(history_widget, chunks[1]);
 
-    // 3. Preview Box
+    // 2. Preview Box
     let mut preview_lines = Vec::new();
+    let (time_str, path_str) = if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
+        let ts = arena.timestamps[arena_idx as usize];
+        let cwd = arena.cwd_str(arena_idx);
+        (format_relative_time(ts), abbreviate_path(cwd))
+    } else {
+        ("--:--".to_owned(), String::new())
+    };
+
+    let time_spans = vec![
+        Span::styled("[", Style::default().fg(Color::DarkGray)),
+        Span::styled(time_str, Style::default().fg(Color::Gray)),
+        Span::styled("]", Style::default().fg(Color::DarkGray)),
+    ];
+    let path_spans = vec![
+        Span::styled("[", Style::default().fg(Color::DarkGray)),
+        Span::styled(path_str, Style::default().fg(Color::DarkGray)),
+        Span::styled("]", Style::default().fg(Color::DarkGray)),
+    ];
+
+    let preview_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title_top(Line::from(time_spans).alignment(Alignment::Left))
+        .title_top(Line::from(path_spans).alignment(Alignment::Right));
+
     if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
         let cmd = arena.cmd_str(arena_idx);
-        let cwd = arena.cwd_str(arena_idx);
-        let ts = arena.timestamps[arena_idx as usize];
         let dur = arena.durations[arena_idx as usize];
         let exit = arena.exit_codes[arena_idx as usize];
-
-        let rel_time = format_relative_time(ts);
         let dur_str = format_duration(dur);
-
-        // Header line 1: directory
-        preview_lines.push(Line::from(vec![
-            Span::styled("  Dir: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(cwd, Style::default().fg(Color::Yellow)),
-        ]));
-
-        // Header line 2: stats
         let (exit_str, exit_style) = format_exit_status(exit);
+
+        // Header: duration and exit code
         preview_lines.push(Line::from(vec![
-            Span::styled("  Time: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{rel_time} ago  ")),
-            Span::styled("Duration: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{dur_str}  ")),
+            Span::styled("  Duration: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{dur_str}   ")),
             Span::styled("Exit: ", Style::default().fg(Color::DarkGray)),
             Span::styled(exit_str, exit_style),
         ]));
 
-        // Separator
         preview_lines.push(Line::styled(
             "  ────────────────────────────────────────",
             Style::default().fg(Color::DarkGray),
@@ -575,29 +600,60 @@ pub fn render_frame(
 
     #[allow(clippy::cast_possible_truncation)]
     let preview_scroll_u16 = dash.preview_scroll as u16;
-    let preview_block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Preview ")
-        .border_style(Style::default().fg(Color::DarkGray));
     let preview_widget = Paragraph::new(preview_lines)
         .block(preview_block)
         .scroll((preview_scroll_u16, 0));
     f.render_widget(preview_widget, chunks[2]);
 
-    // 4. Footer
-    let footer_text = Line::from(vec![
-        Span::styled(" [^G] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::raw("Scope  "),
-        Span::styled("[Enter] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        Span::raw("Run  "),
-        Span::styled("[Tab] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw("Edit  "),
-        Span::styled("[Alt+J/K] ", Style::default().fg(Color::Magenta)),
-        Span::raw("Preview Scroll  "),
-        Span::styled("[Esc] ", Style::default().fg(Color::Red)),
-        Span::raw("Cancel"),
+    // 3. Search Query Box (bottom)
+    let scope_char = match dash.scope {
+        Scope::Local => "L",
+        Scope::Global => "G",
+    };
+    let scope_spans = vec![
+        Span::styled("[", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            scope_char,
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("]", Style::default().fg(Color::DarkGray)),
+    ];
+
+    let total = dash.result.indices.len();
+    let current = if total == 0 {
+        0
+    } else {
+        dash.selected.min(total.saturating_sub(1)) + 1
+    };
+    let count_str = format!("{current}/{total}");
+    let count_spans = vec![
+        Span::styled("[", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            count_str,
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("]", Style::default().fg(Color::DarkGray)),
+    ];
+
+    let query_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title_top(Line::from(scope_spans).alignment(Alignment::Left))
+        .title_top(Line::from(count_spans).alignment(Alignment::Right));
+
+    let query_line = Line::from(vec![
+        Span::styled(" ", Style::default().fg(Color::DarkGray)),
+        Span::raw(&dash.query),
     ]);
-    f.render_widget(Paragraph::new(footer_text), chunks[3]);
+    let query_widget = Paragraph::new(query_line).block(query_block);
+    f.render_widget(query_widget, chunks[3]);
+
+    // Position hardware cursor
+    #[allow(clippy::cast_possible_truncation)]
+    let cursor_x = (chunks[3].x + 3 + dash.cursor as u16).min(chunks[3].x + chunks[3].width.saturating_sub(2));
+    let cursor_y = chunks[3].y + 1;
+    f.set_cursor_position((cursor_x, cursor_y));
 }
 
 // ── Public Event Loop ────────────────────────────────────────────
