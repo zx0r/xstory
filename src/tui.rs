@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -510,40 +510,119 @@ fn split_spans_into_lines(spans: Vec<Span<'_>>) -> Vec<Line<'_>> {
 
 // ── Frame Rendering ──────────────────────────────────────────────
 
+#[allow(clippy::option_if_let_else)]
+fn extract_query_term(query: &str) -> &str {
+    let trimmed = query.trim();
+    if let Some(rest) = trimmed.strip_prefix('^') {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix('\'') {
+        rest
+    } else if let Some(rest) = trimmed.strip_suffix('$') {
+        rest
+    } else {
+        trimmed
+    }
+}
+
+/// Zero-Destructive AST syntax highlighter with character-level query match overlay.
+///
+/// 1. Maps AST syntax tokens to character style slots.
+/// 2. If a search query is present, performs case-insensitive subsequence match.
+/// 3. Overlays matched characters with `Color::Yellow` + `BOLD` without mutating surrounding syntax.
+/// 4. Coalesces adjacent characters of identical style into zero-copy `Span` slices of `cmd`.
 fn build_highlighted_spans<'a>(
     cmd: &'a str,
     spans: &[syntax::Span],
     theme: Theme,
+    query: Option<&str>,
 ) -> Vec<Span<'a>> {
-    let bytes = cmd.as_bytes();
-    let mut out = Vec::new();
-    let mut last_end = 0_usize;
+    if cmd.is_empty() {
+        return Vec::new();
+    }
 
+    let char_offsets: Vec<(usize, char)> = cmd.char_indices().collect();
+    let char_count = char_offsets.len();
+    if char_count == 0 {
+        return Vec::new();
+    }
+
+    let base_style = syntax::style_for(syntax::TokenKind::Plain, theme);
+    let mut char_styles = vec![base_style; char_count];
+
+    // 1. AST syntax token layer
     for span in spans {
-        let s = span.start as usize;
-        let e = span.end as usize;
-        if s > last_end && s <= bytes.len()
-            && let Ok(gap) = std::str::from_utf8(&bytes[last_end..s])
-        {
-            out.push(Span::raw(gap));
+        let s_byte = span.start as usize;
+        let e_byte = span.end as usize;
+        let start_char = char_offsets
+            .binary_search_by_key(&s_byte, |&(b, _)| b)
+            .unwrap_or_else(|idx| idx)
+            .min(char_count);
+        let end_char = char_offsets
+            .binary_search_by_key(&e_byte, |&(b, _)| b)
+            .unwrap_or_else(|idx| idx)
+            .min(char_count);
+
+        let style = syntax::style_for(span.kind, theme);
+        for s in &mut char_styles[start_char..end_char] {
+            *s = style;
         }
-        if e <= bytes.len() && s < e
-            && let Ok(tok) = std::str::from_utf8(&bytes[s..e])
-        {
-            let style = syntax::style_for(span.kind, theme);
-            out.push(Span::styled(tok, style));
-        }
-        last_end = e;
     }
 
-    if last_end < bytes.len()
-        && let Ok(tail) = std::str::from_utf8(&bytes[last_end..])
-    {
-        out.push(Span::raw(tail));
+    // 2. Query match overlay (Zero-Destructive Subsequence Overlay)
+    if let Some(q) = query {
+        let query_term = extract_query_term(q);
+        if !query_term.is_empty() {
+            let query_chars: Vec<char> = query_term.chars().collect();
+            let mut match_indices = std::collections::HashSet::new();
+            let mut q_idx = 0;
+
+            for (t_idx, &(_, t_ch)) in char_offsets.iter().enumerate() {
+                if q_idx < query_chars.len() {
+                    let q_ch = query_chars[q_idx];
+                    if t_ch.eq_ignore_ascii_case(&q_ch)
+                        || t_ch.to_lowercase().eq(q_ch.to_lowercase())
+                    {
+                        match_indices.insert(t_idx);
+                        q_idx += 1;
+                    }
+                }
+            }
+
+            // 3. Highlight matched characters in standard ANSI Color::Yellow + BOLD
+            if q_idx == query_chars.len() {
+                let match_style = Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD);
+                for idx in match_indices {
+                    if idx < char_styles.len() {
+                        char_styles[idx] = match_style;
+                    }
+                }
+            }
+        }
     }
 
-    if out.is_empty() && !cmd.is_empty() {
-        out.push(Span::raw(cmd));
+    // 4. Span coalescing (group adjacent characters of identical style into zero-copy slices)
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < char_count {
+        let style = char_styles[i];
+        let mut j = i + 1;
+        while j < char_count && char_styles[j] == style {
+            j += 1;
+        }
+
+        let byte_start = char_offsets[i].0;
+        let byte_end = if j < char_count {
+            char_offsets[j].0
+        } else {
+            cmd.len()
+        };
+
+        if let Some(slice) = cmd.get(byte_start..byte_end) {
+            out.push(Span::styled(slice, style));
+        }
+        i = j;
     }
 
     out
@@ -654,7 +733,7 @@ pub fn render_frame(
             }
 
             // Command syntax spans: preserved identically without mutating style on selection
-            let mut highlighted = build_highlighted_spans(cmd, spans_syntax, dash.theme);
+            let mut highlighted = build_highlighted_spans(cmd, spans_syntax, dash.theme, Some(&dash.query));
             line_spans.append(&mut highlighted);
 
             // Pad row across the entire inner width of the panel
@@ -722,7 +801,7 @@ pub fn render_frame(
     if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
         let cmd = arena.cmd_str(arena_idx);
         let preview_spans = syntax::preview(preview_cache, cmd);
-        let raw_spans = build_highlighted_spans(cmd, preview_spans, dash.theme);
+        let raw_spans = build_highlighted_spans(cmd, preview_spans, dash.theme, None);
         preview_lines = split_spans_into_lines(raw_spans);
     }
 
@@ -837,6 +916,7 @@ pub fn run_tui(
                             dash.dedup_total = arena.scope_indices(dash.scope).len();
                             dash.result = search::search(arena, &dash.query, dash.scope);
                             dash.selected = 0;
+                            dash.preview_scroll = 0;
                             dash.dirty = true;
                         }
                         'u' => {
@@ -844,6 +924,7 @@ pub fn run_tui(
                             dash.delete_to_start();
                             dash.result = search::search(arena, &dash.query, dash.scope);
                             dash.selected = 0;
+                            dash.preview_scroll = 0;
                             dash.dirty = true;
                         }
                         'w' => {
@@ -851,6 +932,7 @@ pub fn run_tui(
                             dash.delete_word_before();
                             dash.result = search::search(arena, &dash.query, dash.scope);
                             dash.selected = 0;
+                            dash.preview_scroll = 0;
                             dash.dirty = true;
                         }
                         'a' => {
@@ -897,6 +979,7 @@ pub fn run_tui(
                     dash.insert_char(c);
                     dash.result = search::search(arena, &dash.query, dash.scope);
                     dash.selected = 0;
+                    dash.preview_scroll = 0;
                     dash.dirty = true;
                 }
             }
@@ -905,6 +988,7 @@ pub fn run_tui(
                 dash.delete_char_before();
                 dash.result = search::search(arena, &dash.query, dash.scope);
                 dash.selected = 0;
+                dash.preview_scroll = 0;
                 dash.dirty = true;
             }
             Event::Key(KeyEvent { code: KeyCode::Left, .. }) => {
@@ -960,16 +1044,69 @@ pub fn run_tui(
                 dash.dirty = true;
             }
 
-            // --- Mouse scroll support ---
-            Event::Mouse(MouseEvent { kind: MouseEventKind::ScrollUp, .. }) => {
-                dash.focus = FocusedPanel::History;
-                dash.move_selection(-1);
-                dash.dirty = true;
-            }
-            Event::Mouse(MouseEvent { kind: MouseEventKind::ScrollDown, .. }) => {
-                dash.focus = FocusedPanel::History;
-                dash.move_selection(1);
-                dash.dirty = true;
+            // --- Mouse scroll & click support ---
+            Event::Mouse(mouse) => {
+                let layout = compute_master_layout(Rect::new(0, 0, dash.width, dash.height));
+                let is_over_preview = mouse.column >= layout.preview.x
+                    && mouse.column < layout.preview.x + layout.preview.width
+                    && mouse.row >= layout.preview.y
+                    && mouse.row < layout.preview.y + layout.preview.height;
+
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        if is_over_preview {
+                            dash.focus = FocusedPanel::Preview;
+                            dash.scroll_preview(-1, 1000);
+                        } else {
+                            dash.focus = FocusedPanel::History;
+                            dash.move_selection(-1);
+                        }
+                        dash.dirty = true;
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if is_over_preview {
+                            dash.focus = FocusedPanel::Preview;
+                            dash.scroll_preview(1, 1000);
+                        } else {
+                            dash.focus = FocusedPanel::History;
+                            dash.move_selection(1);
+                        }
+                        dash.dirty = true;
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let history_block = create_panel_block(PanelFocus::Unfocused);
+                        let history_inner = history_block.inner(layout.history);
+                        if mouse.column >= history_inner.x
+                            && mouse.column < history_inner.x + history_inner.width
+                            && mouse.row >= history_inner.y
+                            && mouse.row < history_inner.y + history_inner.height
+                        {
+                            let row_offset = (mouse.row - history_inner.y) as usize;
+                            let clicked_idx = dash.viewport_offset + row_offset;
+                            if clicked_idx < dash.result.indices.len() {
+                                dash.focus = FocusedPanel::History;
+                                dash.selected = clicked_idx;
+                                dash.preview_scroll = 0;
+                                dash.dirty = true;
+                            }
+                        } else if is_over_preview {
+                            dash.focus = FocusedPanel::Preview;
+                            dash.dirty = true;
+                        } else {
+                            let query_block = create_panel_block(PanelFocus::Unfocused);
+                            let query_inner = query_block.inner(layout.query);
+                            if mouse.column >= query_inner.x
+                                && mouse.column < query_inner.x + query_inner.width
+                                && mouse.row >= query_inner.y
+                                && mouse.row < query_inner.y + query_inner.height
+                            {
+                                dash.focus = FocusedPanel::Query;
+                                dash.dirty = true;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
 
             // --- Terminal Actions ---
@@ -1238,5 +1375,76 @@ mod tests {
             area.width - 2 - (2 * PANEL_PADDING_HORIZONTAL)
         );
         assert_eq!(inner_focused.height, area.height - 2);
+    }
+
+    #[test]
+    fn build_highlighted_spans_match_overlay_and_syntax_preservation() {
+        let mut token_cache = TokenCache::new();
+        let cmd = "git commit -m 'init'";
+        let spans_syntax = syntax::tokenize(&mut token_cache, cmd);
+
+        // 1. Without query (e.g. preview pane): pure syntax highlighting, no yellow match overlay
+        let spans_no_query = build_highlighted_spans(cmd, spans_syntax, Theme::Dark, None);
+        assert!(!spans_no_query.is_empty());
+        for span in &spans_no_query {
+            assert_ne!(
+                span.style,
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                "No span should have match highlight when query is None"
+            );
+        }
+
+        // 2. With matching query: matched characters get Color::Yellow + BOLD overlay
+        let spans_with_query = build_highlighted_spans(cmd, spans_syntax, Theme::Dark, Some("commit"));
+        let has_yellow_bold = spans_with_query.iter().any(|span| {
+            span.style.fg == Some(Color::Yellow)
+                && span.style.add_modifier.contains(Modifier::BOLD)
+                && span.content == "commit"
+        });
+        assert!(has_yellow_bold, "Expected 'commit' to be highlighted with Color::Yellow and BOLD");
+
+        // 3. Case-insensitive subsequence match
+        let spans_case = build_highlighted_spans(cmd, spans_syntax, Theme::Dark, Some("GIT"));
+        let has_git_match = spans_case.iter().any(|span| {
+            span.style.fg == Some(Color::Yellow)
+                && span.style.add_modifier.contains(Modifier::BOLD)
+                && span.content == "git"
+        });
+        assert!(has_git_match, "Expected case-insensitive match for 'GIT'");
+
+        // 4. Operator prefix stripping ('commit or ^commit)
+        let spans_prefix = build_highlighted_spans(cmd, spans_syntax, Theme::Dark, Some("^commit"));
+        let has_prefix_match = spans_prefix.iter().any(|span| {
+            span.style.fg == Some(Color::Yellow)
+                && span.style.add_modifier.contains(Modifier::BOLD)
+                && span.content == "commit"
+        });
+        assert!(has_prefix_match, "Expected stripped query '^commit' to match 'commit'");
+    }
+
+    #[test]
+    fn preview_scroll_auto_reset_behavior() {
+        let (_dir, arena) = make_test_arena(&[
+            "1000\t50\t0\t/home\tgit status",
+            "2000\t50\t0\t/home\tgit diff",
+        ]);
+        let mut dash = Dashboard::new(Theme::Dark, 80, 24, None, &arena);
+
+        // Manually scroll preview
+        dash.scroll_preview(5, 50);
+        assert_eq!(dash.preview_scroll, 5);
+
+        // 1. Moving selection resets preview_scroll to 0
+        dash.move_selection(1);
+        assert_eq!(dash.selected, 1);
+        assert_eq!(dash.preview_scroll, 0);
+
+        // Scroll again
+        dash.scroll_preview(3, 50);
+        assert_eq!(dash.preview_scroll, 3);
+
+        // 2. Toggling scope resets preview_scroll to 0
+        dash.toggle_scope();
+        assert_eq!(dash.preview_scroll, 0);
     }
 }
