@@ -7,7 +7,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, Mouse
 use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::arena::{Arena, Config, Scope, Theme};
@@ -390,7 +390,7 @@ fn calc_preview_height(cmd: &str, width: u16, max_height: u16) -> u16 {
     if cmd.trim().is_empty() {
         return 3.min(max_height);
     }
-    let inner_width = width.saturating_sub(4).max(1);
+    let inner_width = width.saturating_sub(6).max(1);
     let mut total_lines: u16 = 0;
     for line in cmd.lines() {
         #[allow(clippy::cast_possible_truncation)]
@@ -400,6 +400,30 @@ fn calc_preview_height(cmd: &str, width: u16, max_height: u16) -> u16 {
     }
     let max_content = max_height.saturating_sub(2);
     total_lines.clamp(1, max_content) + 2
+}
+
+fn split_spans_into_lines(spans: Vec<Span<'_>>) -> Vec<Line<'_>> {
+    let mut lines = Vec::new();
+    let mut current_line_spans = Vec::new();
+
+    for span in spans {
+        let style = span.style;
+        let s = span.content.as_ref();
+        for (idx, part) in s.split('\n').enumerate() {
+            if idx > 0 {
+                lines.push(Line::from(std::mem::take(&mut current_line_spans)));
+            }
+            if !part.is_empty() {
+                current_line_spans.push(Span::styled(part.to_string(), style));
+            }
+        }
+    }
+
+    if !current_line_spans.is_empty() || lines.is_empty() {
+        lines.push(Line::from(current_line_spans));
+    }
+
+    lines
 }
 
 // ── Frame Rendering ──────────────────────────────────────────────
@@ -517,8 +541,8 @@ pub fn render_frame(
             let mut line_spans = Vec::new();
 
             let sel_bg = match dash.theme {
-                Theme::Dark => Color::Rgb(34, 38, 56),
-                Theme::Light => Color::Rgb(232, 236, 242),
+                Theme::Dark => Color::Rgb(56, 64, 90),
+                Theme::Light => Color::Rgb(218, 226, 240),
             };
 
             // Cursor prefix
@@ -623,23 +647,22 @@ pub fn render_frame(
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::DarkGray))
+        .padding(Padding::horizontal(1))
         .title_top(Line::from(time_spans).alignment(Alignment::Left))
         .title_top(Line::from(path_spans).alignment(Alignment::Right));
 
     if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
         let cmd = arena.cmd_str(arena_idx);
         let preview_spans = syntax::preview(preview_cache, cmd);
-        for cmd_line in cmd.lines() {
-            let mut l_spans = vec![Span::raw("  ")];
-            l_spans.append(&mut build_highlighted_spans(cmd_line, preview_spans, dash.theme));
-            preview_lines.push(Line::from(l_spans));
-        }
+        let raw_spans = build_highlighted_spans(cmd, preview_spans, dash.theme);
+        preview_lines = split_spans_into_lines(raw_spans);
     }
 
     #[allow(clippy::cast_possible_truncation)]
     let preview_scroll_u16 = dash.preview_scroll as u16;
     let preview_widget = Paragraph::new(preview_lines)
         .block(preview_block)
+        .wrap(Wrap { trim: false })
         .scroll((preview_scroll_u16, 0));
     f.render_widget(preview_widget, chunks[3]);
 
