@@ -1,12 +1,8 @@
-mod arena;
-mod error;
-mod record;
-mod search;
-mod syntax;
-mod tui;
-
 use std::io::Write;
-use error::Error;
+use xstory::arena;
+use xstory::error::Error;
+use xstory::record;
+use xstory::tui;
 
 // ── Shell Hooks ──────────────────────────────────────────────────
 
@@ -127,6 +123,7 @@ mod signals {
         );
         let _ = stderr.flush();
 
+        // SAFETY: reset disposition to default (SIG_DFL) and raise signal so parent shell gets real signal
         unsafe {
             signal(sig, std::mem::transmute::<usize, extern "C" fn(i32)>(SIG_DFL));
             let _ = raise(sig);
@@ -134,6 +131,7 @@ mod signals {
     }
 
     pub fn install() {
+        // SAFETY: standard C POSIX signal installation for graceful terminal restoration on exit
         unsafe {
             signal(SIGINT, handle_signal);
             signal(SIGTERM, handle_signal);

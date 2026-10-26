@@ -587,6 +587,9 @@ pub fn render_frame(
 
 /// Run the interactive TUI. Borrows Arena for the entire session.
 /// Returns Outcome determining the process exit code.
+///
+/// # Errors
+/// Returns `Error::Io` on terminal manipulation or event read failure.
 #[allow(clippy::too_many_lines)]
 pub fn run_tui(
     arena: &Arena,

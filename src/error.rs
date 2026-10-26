@@ -32,6 +32,7 @@ impl From<std::io::Error> for Error {
 }
 
 impl Error {
+    #[must_use]
     #[allow(clippy::unused_self)]
     pub const fn exit_code(&self) -> i32 {
         1

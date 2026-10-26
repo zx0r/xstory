@@ -67,16 +67,26 @@ fn evaluate(cmd: &str, config: &Config) -> Verdict {
 }
 
 /// Mask a command that contains secret patterns.
-/// Replaces the command with `***` placeholder.
+/// Replaces sensitive flags and keys along with their values with `***`.
 fn mask_command(cmd: &str, config: &Config) -> String {
     let mut masked = cmd.to_owned();
     for pat in &config.secret_patterns {
-        if let Some(pos) = masked.find(pat.as_str()) {
-            // Find the value part after the pattern
-            // Replace from pattern start to next whitespace or end
-            let rest = &masked[pos..];
-            let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
-            masked.replace_range(pos..pos + end, "***");
+        while let Some(pos) = masked.find(pat.as_str()) {
+            let after_pat = pos + pat.len();
+            let rest = &masked[after_pat..];
+            let end = if rest.starts_with('=') || rest.starts_with(':') {
+                let val_rest = &rest[1..];
+                let val_end = val_rest.find(|c: char| c.is_whitespace()).unwrap_or(val_rest.len());
+                1 + val_end
+            } else if rest.starts_with(' ') {
+                let trimmed = rest.trim_start();
+                let spaces = rest.len() - trimmed.len();
+                let val_end = trimmed.find(|c: char| c.is_whitespace()).unwrap_or(trimmed.len());
+                spaces + val_end
+            } else {
+                rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len())
+            };
+            masked.replace_range(pos..after_pat + end, "***");
         }
     }
     masked
@@ -90,6 +100,9 @@ fn mask_command(cmd: &str, config: &Config) -> String {
 /// `exit_code`: process exit code
 /// `duration_ms`: execution duration in milliseconds
 /// `cwd`: working directory (falls back to `$PWD` or "?")
+///
+/// # Errors
+/// Returns `Error::Io` if writing to the history file fails.
 #[allow(clippy::cast_possible_wrap)]
 pub fn record(
     cmd_parts: &[String],
@@ -158,6 +171,9 @@ pub fn record(
 }
 
 /// Record with explicit path override (for testing).
+///
+/// # Errors
+/// Returns `Error::Io` if writing to the specified path fails.
 #[allow(dead_code, clippy::cast_possible_wrap)]
 pub fn record_to_path(
     cmd_parts: &[String],
