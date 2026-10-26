@@ -516,31 +516,45 @@ pub fn render_frame(
             let spans_syntax = syntax::tokenize(token_cache, cmd);
             let mut line_spans = Vec::new();
 
+            let sel_bg = match dash.theme {
+                Theme::Dark => Color::Rgb(34, 38, 56),
+                Theme::Light => Color::Rgb(232, 236, 242),
+            };
+
             // Cursor prefix
             if is_selected {
                 line_spans.push(Span::styled(
                     "> ",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .bg(sel_bg)
+                        .add_modifier(Modifier::BOLD),
                 ));
             } else {
                 line_spans.push(Span::raw("  "));
             }
 
-            // Command syntax spans: failed/interrupted commands are dimmed to DarkGray
+            // Command syntax spans: unselected failed commands are dimmed to DarkGray
             let mut highlighted = build_highlighted_spans(cmd, spans_syntax, dash.theme);
-            if exit_code != 0 {
+            if exit_code != 0 && !is_selected {
                 for s in &mut highlighted {
                     s.style = Style::default().fg(Color::DarkGray);
                 }
             }
             if is_selected {
                 for s in &mut highlighted {
-                    s.style = s.style.add_modifier(Modifier::BOLD);
+                    s.style = s.style
+                        .bg(sel_bg)
+                        .add_modifier(Modifier::BOLD | Modifier::ITALIC);
                 }
             }
             line_spans.append(&mut highlighted);
 
-            history_lines.push(Line::from(line_spans));
+            let mut line = Line::from(line_spans);
+            if is_selected {
+                line = line.style(Style::default().bg(sel_bg));
+            }
+            history_lines.push(line);
         } else {
             history_lines.push(Line::raw(""));
         }
