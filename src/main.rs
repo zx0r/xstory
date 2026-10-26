@@ -1,5 +1,7 @@
 mod arena;
 mod error;
+#[allow(dead_code)]
+mod record;
 
 use error::Error;
 
