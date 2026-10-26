@@ -569,13 +569,8 @@ pub fn render_frame(
                 line_spans.push(Span::raw("  "));
             }
 
-            // Command syntax spans: preserved across all rows without flipping state on selection
+            // Command syntax spans: preserved identically without mutating style on selection
             let mut highlighted = build_highlighted_spans(cmd, spans_syntax, dash.theme);
-            if is_selected {
-                for s in &mut highlighted {
-                    s.style = s.style.add_modifier(Modifier::BOLD | Modifier::ITALIC);
-                }
-            }
             line_spans.append(&mut highlighted);
 
             // Pad row across the entire width of the panel
