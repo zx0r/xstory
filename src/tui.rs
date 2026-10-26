@@ -582,8 +582,8 @@ pub fn render_frame(
 
             if is_selected {
                 let sel_bg = match dash.theme {
-                    Theme::Dark => Color::Rgb(34, 38, 56),
-                    Theme::Light => Color::Rgb(232, 236, 242),
+                    Theme::Dark => Color::DarkGray,
+                    Theme::Light => Color::Gray,
                 };
                 for span in &mut line_spans {
                     span.style = span.style.bg(sel_bg);
