@@ -353,16 +353,6 @@ fn format_relative_time(timestamp_ms: i64) -> String {
     }
 }
 
-fn format_duration(duration_ms: u32) -> String {
-    if duration_ms < 1000 {
-        format!("{duration_ms}ms")
-    } else if duration_ms < 60_000 {
-        format!("{:.1}s", f64::from(duration_ms) / 1000.0)
-    } else {
-        format!("{}m{}s", duration_ms / 60_000, (duration_ms % 60_000) / 1000)
-    }
-}
-
 fn abbreviate_path(path: &str) -> String {
     if let Ok(home) = std::env::var("HOME") {
         if path == home {
@@ -375,29 +365,6 @@ fn abbreviate_path(path: &str) -> String {
         }
     }
     path.to_owned()
-}
-
-fn format_exit_status(exit: i32) -> (String, Style) {
-    if exit == 0 {
-        ("0 (ok)".to_owned(), Style::default().fg(Color::DarkGray))
-    } else {
-        let label = match exit {
-            1 => "failed",
-            2 => "misuse / syntax error",
-            126 => "permission denied",
-            127 => "command not found",
-            130 => "interrupted (SIGINT)",
-            137 => "killed (SIGKILL)",
-            143 => "terminated (SIGTERM)",
-            _ if exit < 0 => "abnormal termination",
-            _ if (128..=192).contains(&exit) => "interrupted by signal",
-            _ => "failed",
-        };
-        (
-            format!("{exit} ({label})"),
-            Style::default().fg(Color::Yellow),
-        )
-    }
 }
 
 // ── Frame Rendering ──────────────────────────────────────────────
@@ -571,25 +538,6 @@ pub fn render_frame(
 
     if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
         let cmd = arena.cmd_str(arena_idx);
-        let dur = arena.durations[arena_idx as usize];
-        let exit = arena.exit_codes[arena_idx as usize];
-        let dur_str = format_duration(dur);
-        let (exit_str, exit_style) = format_exit_status(exit);
-
-        // Header: duration and exit code
-        preview_lines.push(Line::from(vec![
-            Span::styled("  Duration: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{dur_str}   ")),
-            Span::styled("Exit: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(exit_str, exit_style),
-        ]));
-
-        preview_lines.push(Line::styled(
-            "  ────────────────────────────────────────",
-            Style::default().fg(Color::DarkGray),
-        ));
-
-        // Command lines with preview syntax highlighting
         let preview_spans = syntax::preview(preview_cache, cmd);
         for cmd_line in cmd.lines() {
             let mut l_spans = vec![Span::raw("  ")];
@@ -1012,22 +960,5 @@ mod tests {
         terminal.draw(|f| {
             render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache);
         }).expect("draw");
-    }
-
-    #[test]
-    fn exit_status_formatting() {
-        let (zero_str, zero_style) = format_exit_status(0);
-        assert_eq!(zero_str, "0 (ok)");
-        assert_eq!(zero_style.fg, Some(Color::DarkGray));
-
-        let (fail_str, fail_style) = format_exit_status(1);
-        assert_eq!(fail_str, "1 (failed)");
-        assert_eq!(fail_style.fg, Some(Color::Yellow));
-
-        let (sigint_str, _) = format_exit_status(130);
-        assert_eq!(sigint_str, "130 (interrupted (SIGINT))");
-
-        let (neg_str, _) = format_exit_status(-1);
-        assert_eq!(neg_str, "-1 (abnormal termination)");
     }
 }
