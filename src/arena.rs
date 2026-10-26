@@ -92,7 +92,7 @@ pub struct Arena {
 // ── FNV-1a ───────────────────────────────────────────────────────
 
 #[inline]
-fn fnv1a(bytes: &[u8]) -> u64 {
+pub fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in bytes {
         h ^= u64::from(b);
