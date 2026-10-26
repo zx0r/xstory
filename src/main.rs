@@ -1,3 +1,4 @@
+mod arena;
 mod error;
 
 use error::Error;

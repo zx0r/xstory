@@ -13,6 +13,9 @@ tree-sitter-bash = "0.23"
 rayon = "1.10"
 memchr = "2.7"
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 lto = true
 codegen-units = 1
