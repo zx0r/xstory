@@ -651,7 +651,7 @@ pub fn render_frame(
     // 1. Action Buttons
     let items = [
         ("[Esc]", " Exit"),
-        ("[^G]", " Scope"),
+        ("[^R]", " Scope"),
         ("[↵]", " Run"),
         ("[Tab]", " Edit"),
     ];
@@ -713,7 +713,9 @@ pub fn render_frame(
     let mut history_lines = Vec::with_capacity(history_inner_height);
 
     for row_idx in 0..history_inner_height {
-        let item_idx = dash.viewport_offset + row_idx;
+        // Bottom-up alignment: row_idx = history_inner_height - 1 is the bottom-most line
+        let from_bottom = (history_inner_height.saturating_sub(1)).saturating_sub(row_idx);
+        let item_idx = dash.viewport_offset + from_bottom;
         if item_idx < dash.result.indices.len() {
             let arena_idx = dash.result.indices[item_idx];
             let cmd = arena.cmd_str(arena_idx);
@@ -910,7 +912,7 @@ pub fn run_tui(
             Event::Key(KeyEvent { code: KeyCode::Char(c), modifiers, .. }) => {
                 if modifiers == KeyModifiers::CONTROL {
                     match c {
-                        'g' => {
+                        'r' | 'g' => {
                             dash.focus = FocusedPanel::Query;
                             dash.toggle_scope();
                             dash.dedup_total = arena.scope_indices(dash.scope).len();
@@ -947,12 +949,12 @@ pub fn run_tui(
                         }
                         'p' => {
                             dash.focus = FocusedPanel::History;
-                            dash.move_selection(-1);
+                            dash.move_selection(1);
                             dash.dirty = true;
                         }
                         'n' => {
                             dash.focus = FocusedPanel::History;
-                            dash.move_selection(1);
+                            dash.move_selection(-1);
                             dash.dirty = true;
                         }
                         'c' | 'd' => {
@@ -1019,7 +1021,7 @@ pub fn run_tui(
                     dash.scroll_preview(-1, 1000);
                 } else {
                     dash.focus = FocusedPanel::History;
-                    dash.move_selection(-1);
+                    dash.move_selection(1);
                 }
                 dash.dirty = true;
             }
@@ -1029,18 +1031,18 @@ pub fn run_tui(
                     dash.scroll_preview(1, 1000);
                 } else {
                     dash.focus = FocusedPanel::History;
-                    dash.move_selection(1);
+                    dash.move_selection(-1);
                 }
                 dash.dirty = true;
             }
             Event::Key(KeyEvent { code: KeyCode::PageUp, .. }) => {
                 dash.focus = FocusedPanel::History;
-                dash.move_selection(-10);
+                dash.move_selection(10);
                 dash.dirty = true;
             }
             Event::Key(KeyEvent { code: KeyCode::PageDown, .. }) => {
                 dash.focus = FocusedPanel::History;
-                dash.move_selection(10);
+                dash.move_selection(-10);
                 dash.dirty = true;
             }
 
@@ -1059,7 +1061,7 @@ pub fn run_tui(
                             dash.scroll_preview(-1, 1000);
                         } else {
                             dash.focus = FocusedPanel::History;
-                            dash.move_selection(-1);
+                            dash.move_selection(1);
                         }
                         dash.dirty = true;
                     }
@@ -1069,7 +1071,7 @@ pub fn run_tui(
                             dash.scroll_preview(1, 1000);
                         } else {
                             dash.focus = FocusedPanel::History;
-                            dash.move_selection(1);
+                            dash.move_selection(-1);
                         }
                         dash.dirty = true;
                     }
@@ -1082,7 +1084,10 @@ pub fn run_tui(
                             && mouse.row < history_inner.y + history_inner.height
                         {
                             let row_offset = (mouse.row - history_inner.y) as usize;
-                            let clicked_idx = dash.viewport_offset + row_offset;
+                            let from_bottom = (history_inner.height as usize)
+                                .saturating_sub(1)
+                                .saturating_sub(row_offset);
+                            let clicked_idx = dash.viewport_offset + from_bottom;
                             if clicked_idx < dash.result.indices.len() {
                                 dash.focus = FocusedPanel::History;
                                 dash.selected = clicked_idx;
@@ -1446,5 +1451,74 @@ mod tests {
         // 2. Toggling scope resets preview_scroll to 0
         dash.toggle_scope();
         assert_eq!(dash.preview_scroll, 0);
+    }
+
+    #[test]
+    fn bottom_up_places_latest_command_at_bottom_of_panel() {
+        let (_dir, arena) = make_test_arena(&[
+            "1000\t50\t0\t/home\tolder_cmd",
+            "2000\t50\t0\t/home\tlatest_cmd",
+        ]);
+        let mut dash = Dashboard::new(Theme::Dark, 80, 24, None, &arena);
+        assert_eq!(dash.selected, 0);
+        assert_eq!(arena.cmd_str(dash.result.indices[0]), "latest_cmd");
+        assert_eq!(arena.cmd_str(dash.result.indices[1]), "older_cmd");
+
+        let mut token_cache = TokenCache::new();
+        let mut preview_cache = PreviewCache::new();
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+
+        terminal
+            .draw(|f| {
+                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache);
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer().clone();
+        let layout = compute_master_layout(Rect::new(0, 0, 80, 24));
+        let history_block = create_panel_block(PanelFocus::Unfocused);
+        let history_inner = history_block.inner(layout.history);
+
+        // The bottom line of the history inner area
+        let bottom_y = history_inner.y + history_inner.height - 1;
+        let mut bottom_line_text = String::new();
+        for x in history_inner.x..history_inner.x + history_inner.width {
+            bottom_line_text.push(buffer[(x, bottom_y)].symbol().chars().next().unwrap_or(' '));
+        }
+
+        // Verify that latest_cmd is on the bottom line with the selection indicator `>`
+        assert!(
+            bottom_line_text.contains('>'),
+            "Bottom line must have selection marker '>': got {bottom_line_text:?}"
+        );
+        assert!(
+            bottom_line_text.contains("latest_cmd"),
+            "Bottom line must contain the latest command: got {bottom_line_text:?}"
+        );
+
+        // Move selection UP to older command
+        dash.move_selection(1);
+        assert_eq!(dash.selected, 1);
+
+        terminal
+            .draw(|f| {
+                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache);
+            })
+            .expect("draw");
+
+        let buffer2 = terminal.backend().buffer().clone();
+        let mut row_above_bottom = String::new();
+        for x in history_inner.x..history_inner.x + history_inner.width {
+            row_above_bottom.push(buffer2[(x, bottom_y - 1)].symbol().chars().next().unwrap_or(' '));
+        }
+        assert!(
+            row_above_bottom.contains('>'),
+            "Row above bottom must have selection marker '>': got {row_above_bottom:?}"
+        );
+        assert!(
+            row_above_bottom.contains("older_cmd"),
+            "Row above bottom must contain older command: got {row_above_bottom:?}"
+        );
     }
 }
