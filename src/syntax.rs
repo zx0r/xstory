@@ -209,14 +209,16 @@ pub fn preview<'a>(cache: &'a mut PreviewCache, cmd: &str) -> &'a [Span] {
 #[must_use]
 pub fn style_for(kind: TokenKind, theme: Theme) -> Style {
     match theme {
+        // kanagawa-dragon: 109=dragonBlue2, 103=dragonViolet, 108=dragonGreen2,
+        //   180=dragonYellow, 167=dragonRed, 243=dragonAsh, 251=dragonWhite
         Theme::Dark => match kind {
-            TokenKind::Command => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            TokenKind::Flag => Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC),
-            TokenKind::String => Style::default().fg(Color::Green).add_modifier(Modifier::ITALIC),
-            TokenKind::Variable => Style::default().fg(Color::Magenta),
-            TokenKind::Operator => Style::default().fg(Color::LightRed),
-            TokenKind::Comment => Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC),
-            TokenKind::Plain => Style::default().fg(Color::White),
+            TokenKind::Command => Style::default().fg(Color::Indexed(109)).add_modifier(Modifier::BOLD),
+            TokenKind::Flag => Style::default().fg(Color::Indexed(103)).add_modifier(Modifier::ITALIC),
+            TokenKind::String => Style::default().fg(Color::Indexed(108)).add_modifier(Modifier::ITALIC),
+            TokenKind::Variable => Style::default().fg(Color::Indexed(180)),
+            TokenKind::Operator => Style::default().fg(Color::Indexed(167)),
+            TokenKind::Comment => Style::default().fg(Color::Indexed(243)).add_modifier(Modifier::ITALIC),
+            TokenKind::Plain => Style::default().fg(Color::Indexed(251)),
         },
         Theme::Light => match kind {
             TokenKind::Command => Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),

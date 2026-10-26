@@ -242,16 +242,11 @@ impl Dashboard {
         self.height = h;
     }
 
-    /// Get command string for current selection or fallback to query.
+    /// Get command string for current selection if present.
     #[must_use]
-    pub fn selected_command(&self, arena: &Arena) -> String {
-        if let Some(&idx) = self.result.indices.get(self.selected) {
-            arena.cmd_str(idx).to_owned()
-        } else if !self.query.is_empty() {
-            self.query.clone()
-        } else {
-            String::new()
-        }
+    pub fn selected_command(&self, arena: &Arena) -> Option<String> {
+        let &idx = self.result.indices.get(self.selected)?;
+        Some(arena.cmd_str(idx).to_owned())
     }
 }
 
@@ -473,8 +468,8 @@ pub enum PanelFocus {
 #[must_use]
 pub fn create_panel_block(focus: PanelFocus) -> Block<'static> {
     let border_color = match focus {
-        PanelFocus::Focused => Color::Cyan,
-        PanelFocus::Unfocused => Color::DarkGray,
+        PanelFocus::Focused => Color::Indexed(109),
+        PanelFocus::Unfocused => Color::Indexed(241),
     };
 
     Block::default()
@@ -591,7 +586,7 @@ fn build_highlighted_spans<'a>(
             // 3. Highlight matched characters in standard ANSI Color::Yellow + BOLD
             if q_idx == query_chars.len() {
                 let match_style = Style::default()
-                    .fg(Color::Yellow)
+                    .fg(Color::Indexed(215))
                     .add_modifier(Modifier::BOLD);
                 for idx in match_indices {
                     if idx < char_styles.len() {
@@ -660,10 +655,10 @@ pub fn render_frame(
         if i > 0 {
             header_spans.push(Span::raw("   "));
         }
-        header_spans.push(Span::styled(*key, Style::default().fg(Color::DarkGray)));
+        header_spans.push(Span::styled(*key, Style::default().fg(Color::Indexed(241))));
         header_spans.push(Span::styled(
             *desc,
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC),
         ));
     }
     f.render_widget(
@@ -682,12 +677,12 @@ pub fn render_frame(
         Scope::Global => "G",
     };
     let scope_spans = vec![
-        Span::styled("[", Style::default().fg(Color::DarkGray)),
+        Span::styled("[", Style::default().fg(Color::Indexed(241))),
         Span::styled(
             scope_char,
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Indexed(103)).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("]", Style::default().fg(Color::DarkGray)),
+        Span::styled("]", Style::default().fg(Color::Indexed(241))),
     ];
 
     let total = dash.result.indices.len();
@@ -698,9 +693,9 @@ pub fn render_frame(
     };
     let count_str = format!("{}/{}", format_thousands(current), format_thousands(total));
     let count_spans = vec![
-        Span::styled("[", Style::default().fg(Color::DarkGray)),
-        Span::styled(count_str, Style::default().fg(Color::DarkGray)),
-        Span::styled("]", Style::default().fg(Color::DarkGray)),
+        Span::styled("[", Style::default().fg(Color::Indexed(241))),
+        Span::styled(count_str, Style::default().fg(Color::Indexed(241))),
+        Span::styled("]", Style::default().fg(Color::Indexed(241))),
     ];
 
     let history_block = create_panel_block(history_focus)
@@ -728,7 +723,7 @@ pub fn render_frame(
             if is_selected {
                 line_spans.push(Span::styled(
                     "> ",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD),
                 ));
             } else {
                 line_spans.push(Span::raw("  "));
@@ -747,7 +742,7 @@ pub fn render_frame(
 
             if is_selected {
                 let sel_bg = match dash.theme {
-                    Theme::Dark => Color::DarkGray,
+                    Theme::Dark => Color::Indexed(237),
                     Theme::Light => Color::Gray,
                 };
                 for span in &mut line_spans {
@@ -780,20 +775,20 @@ pub fn render_frame(
     };
 
     let time_spans = vec![
-        Span::styled("[", Style::default().fg(Color::DarkGray)),
+        Span::styled("[", Style::default().fg(Color::Indexed(241))),
         Span::styled(
             time_str,
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC),
         ),
-        Span::styled("]", Style::default().fg(Color::DarkGray)),
+        Span::styled("]", Style::default().fg(Color::Indexed(241))),
     ];
     let path_spans = vec![
-        Span::styled("[", Style::default().fg(Color::DarkGray)),
+        Span::styled("[", Style::default().fg(Color::Indexed(241))),
         Span::styled(
             path_str,
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC),
         ),
-        Span::styled("]", Style::default().fg(Color::DarkGray)),
+        Span::styled("]", Style::default().fg(Color::Indexed(241))),
     ];
 
     let mut preview_block = create_panel_block(preview_focus)
@@ -828,12 +823,12 @@ pub fn render_frame(
     if visual_rows > preview_inner.height as usize {
         preview_block = preview_block.title_bottom(
             Line::from(vec![
-                Span::styled("[", Style::default().fg(Color::DarkGray)),
+                Span::styled("[", Style::default().fg(Color::Indexed(241))),
                 Span::styled(
                     format!("{}/{} • Alt+↓/↑ scroll", preview_scroll_u16 + 1, visual_rows),
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                    Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC),
                 ),
-                Span::styled("]", Style::default().fg(Color::DarkGray)),
+                Span::styled("]", Style::default().fg(Color::Indexed(241))),
             ])
             .alignment(Alignment::Right),
         );
@@ -856,7 +851,7 @@ pub fn render_frame(
 
     let prompt_icon = " ";
     let query_line = Line::from(vec![
-        Span::styled(prompt_icon, Style::default().fg(Color::DarkGray)),
+        Span::styled(prompt_icon, Style::default().fg(Color::Indexed(241))),
         Span::raw(&dash.query),
     ]);
     let query_widget = Paragraph::new(query_line).block(query_block);
@@ -912,7 +907,7 @@ pub fn run_tui(
             Event::Key(KeyEvent { code: KeyCode::Char(c), modifiers, .. }) => {
                 if modifiers == KeyModifiers::CONTROL {
                     match c {
-                        'r' | 'g' => {
+                        'r' => {
                             dash.focus = FocusedPanel::Query;
                             dash.toggle_scope();
                             dash.dedup_total = arena.scope_indices(dash.scope).len();
@@ -957,7 +952,7 @@ pub fn run_tui(
                             dash.move_selection(-1);
                             dash.dirty = true;
                         }
-                        'c' | 'd' => {
+                        'c' | 'd' | 'g' => {
                             break Outcome::Cancel;
                         }
                         _ => {}
@@ -1116,12 +1111,21 @@ pub fn run_tui(
 
             // --- Terminal Actions ---
             Event::Key(KeyEvent { code: KeyCode::Enter, .. }) => {
-                let cmd = dash.selected_command(arena);
-                break Outcome::Execute(cmd);
+                if let Some(cmd) = dash.selected_command(arena) {
+                    break Outcome::Execute(cmd);
+                } else if !dash.query.trim().is_empty() {
+                    break Outcome::Execute(dash.query.clone());
+                }
+                break Outcome::Cancel;
             }
             Event::Key(KeyEvent { code: KeyCode::Tab, .. }) => {
-                let cmd = dash.selected_command(arena);
-                break Outcome::Edit(cmd);
+                let cmd = dash
+                    .selected_command(arena)
+                    .unwrap_or_else(|| dash.query.clone());
+                if !cmd.trim().is_empty() {
+                    break Outcome::Edit(cmd);
+                }
+                break Outcome::Cancel;
             }
             Event::Key(KeyEvent { code: KeyCode::Esc, .. }) => {
                 break Outcome::Cancel;
@@ -1275,12 +1279,12 @@ mod tests {
     fn selected_command_extraction() {
         let (_dir, arena) = make_test_arena(&["1000\t50\t0\t/home\tgit status"]);
         let dash = Dashboard::new(Theme::Dark, 80, 24, None, &arena);
-        assert_eq!(dash.selected_command(&arena), "git status");
+        assert_eq!(dash.selected_command(&arena), Some("git status".to_string()));
 
         let (_empty_dir, empty_arena) = make_test_arena(&[]);
         let mut empty_dash = Dashboard::new(Theme::Dark, 80, 24, Some("fallback_cmd"), &empty_arena);
         empty_dash.result = SearchResult::empty();
-        assert_eq!(empty_dash.selected_command(&empty_arena), "fallback_cmd");
+        assert_eq!(empty_dash.selected_command(&empty_arena), None);
     }
 
     #[test]
@@ -1394,7 +1398,7 @@ mod tests {
         for span in &spans_no_query {
             assert_ne!(
                 span.style,
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD),
                 "No span should have match highlight when query is None"
             );
         }
@@ -1402,7 +1406,7 @@ mod tests {
         // 2. With matching query: matched characters get Color::Yellow + BOLD overlay
         let spans_with_query = build_highlighted_spans(cmd, spans_syntax, Theme::Dark, Some("commit"));
         let has_yellow_bold = spans_with_query.iter().any(|span| {
-            span.style.fg == Some(Color::Yellow)
+            span.style.fg == Some(Color::Indexed(215))
                 && span.style.add_modifier.contains(Modifier::BOLD)
                 && span.content == "commit"
         });
@@ -1411,7 +1415,7 @@ mod tests {
         // 3. Case-insensitive subsequence match
         let spans_case = build_highlighted_spans(cmd, spans_syntax, Theme::Dark, Some("GIT"));
         let has_git_match = spans_case.iter().any(|span| {
-            span.style.fg == Some(Color::Yellow)
+            span.style.fg == Some(Color::Indexed(215))
                 && span.style.add_modifier.contains(Modifier::BOLD)
                 && span.content == "git"
         });
@@ -1420,7 +1424,7 @@ mod tests {
         // 4. Operator prefix stripping ('commit or ^commit)
         let spans_prefix = build_highlighted_spans(cmd, spans_syntax, Theme::Dark, Some("^commit"));
         let has_prefix_match = spans_prefix.iter().any(|span| {
-            span.style.fg == Some(Color::Yellow)
+            span.style.fg == Some(Color::Indexed(215))
                 && span.style.add_modifier.contains(Modifier::BOLD)
                 && span.content == "commit"
         });

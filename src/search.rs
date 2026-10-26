@@ -74,11 +74,18 @@ fn match_candidate(
     needle_buf: &mut Vec<char>,
     haystack_buf: &mut Vec<char>,
 ) -> Option<u32> {
-    let needle = Utf32Str::new(match mode {
+    let query_str = match mode {
         QueryMode::Empty => return Some(0),
         QueryMode::Prefix(s) | QueryMode::Substring(s) | QueryMode::Suffix(s) | QueryMode::Fuzzy(s) => s,
-    }, needle_buf);
+    };
 
+    let q_bytes = query_str.as_bytes();
+    let h_bytes = haystack_str.as_bytes();
+    if h_bytes.len() >= q_bytes.len() && h_bytes[..q_bytes.len()].eq_ignore_ascii_case(q_bytes) {
+        return Some(20_000u32.saturating_sub(haystack_str.len().min(10_000) as u32));
+    }
+
+    let needle = Utf32Str::new(query_str, needle_buf);
     let haystack = Utf32Str::new(haystack_str, haystack_buf);
 
     let score = match mode {

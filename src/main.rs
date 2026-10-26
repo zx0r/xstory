@@ -24,11 +24,10 @@ __xstory_search() {
     local cmd
     cmd=$(xstory search --query="$READLINE_LINE")
     local ret=$?
-    if [ $ret -eq 0 ]; then
+    if [ $ret -eq 0 ] && [ -n "$cmd" ]; then
         READLINE_LINE="$cmd"
         READLINE_POINT=${#READLINE_LINE}
-        eval "$cmd"
-    elif [ $ret -eq 2 ]; then
+    elif [ $ret -eq 2 ] && [ -n "$cmd" ]; then
         READLINE_LINE="$cmd"
         READLINE_POINT=${#READLINE_LINE}
     fi
@@ -58,14 +57,16 @@ __xstory_widget() {
     local selected
     selected=$(xstory search --query="$BUFFER")
     local ret=$?
-    if [[ $ret -eq 0 ]]; then
+    if [[ $ret -eq 0 && -n "$selected" ]]; then
         BUFFER="$selected"
         CURSOR=${#BUFFER}
         zle accept-line
-    elif [[ $ret -eq 2 ]]; then
+    elif [[ $ret -eq 2 && -n "$selected" ]]; then
         BUFFER="$selected"
         CURSOR=${#BUFFER}
-        zle redisplay
+        zle reset-prompt
+    else
+        zle reset-prompt
     fi
 }
 zle -N __xstory_widget
@@ -367,12 +368,12 @@ fn run() -> Result<(), Error> {
 
             match outcome {
                 tui::Outcome::Execute(cmd) => {
-                    print!("{cmd}");
+                    println!("{cmd}");
                     let _ = std::io::stdout().flush();
                     std::process::exit(0);
                 }
                 tui::Outcome::Edit(cmd) => {
-                    print!("{cmd}");
+                    println!("{cmd}");
                     let _ = std::io::stdout().flush();
                     std::process::exit(2);
                 }
