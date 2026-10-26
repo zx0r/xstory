@@ -527,6 +527,7 @@ pub fn render_frame(
 
     // 2. History List
     let history_inner_height = chunks[2].height.saturating_sub(2) as usize;
+    let history_inner_width = chunks[2].width.saturating_sub(2) as usize;
     let mut history_lines = Vec::with_capacity(history_inner_height);
 
     for row_idx in 0..history_inner_height {
@@ -540,19 +541,11 @@ pub fn render_frame(
             let spans_syntax = syntax::tokenize(token_cache, cmd);
             let mut line_spans = Vec::new();
 
-            let sel_bg = match dash.theme {
-                Theme::Dark => Color::Rgb(56, 64, 90),
-                Theme::Light => Color::Rgb(218, 226, 240),
-            };
-
             // Cursor prefix
             if is_selected {
                 line_spans.push(Span::styled(
                     "> ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .bg(sel_bg)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
                 ));
             } else {
                 line_spans.push(Span::raw("  "));
@@ -567,18 +560,29 @@ pub fn render_frame(
             }
             if is_selected {
                 for s in &mut highlighted {
-                    s.style = s.style
-                        .bg(sel_bg)
-                        .add_modifier(Modifier::BOLD | Modifier::ITALIC);
+                    s.style = s.style.add_modifier(Modifier::BOLD | Modifier::ITALIC);
                 }
             }
             line_spans.append(&mut highlighted);
 
-            let mut line = Line::from(line_spans);
-            if is_selected {
-                line = line.style(Style::default().bg(sel_bg));
+            // Pad row across the entire width of the panel
+            let used_width: usize = 2 + cmd.chars().count();
+            let padding_count = history_inner_width.saturating_sub(used_width);
+            if padding_count > 0 {
+                line_spans.push(Span::raw(" ".repeat(padding_count)));
             }
-            history_lines.push(line);
+
+            if is_selected {
+                let sel_bg = match dash.theme {
+                    Theme::Dark => Color::Rgb(34, 38, 56),
+                    Theme::Light => Color::Rgb(232, 236, 242),
+                };
+                for span in &mut line_spans {
+                    span.style = span.style.bg(sel_bg);
+                }
+            }
+
+            history_lines.push(Line::from(line_spans));
         } else {
             history_lines.push(Line::raw(""));
         }
