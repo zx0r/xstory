@@ -43,14 +43,14 @@ impl PartialOrd for Scored {
 }
 
 /// Scope filter for local vs global search.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scope {
     Global,
     Local,
 }
 
 /// Terminal color scheme.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Theme {
     Dark,
     Light,

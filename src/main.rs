@@ -6,6 +6,8 @@ mod record;
 mod search;
 #[allow(dead_code)]
 mod syntax;
+#[allow(dead_code)]
+mod tui;
 
 use error::Error;
 
