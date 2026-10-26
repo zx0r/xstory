@@ -461,7 +461,7 @@ pub fn render_frame(
         return;
     }
 
-    let max_preview_h = (area.height / 2).clamp(6, 20).min(area.height.saturating_sub(8));
+    let max_preview_h = (area.height / 2).clamp(6, 20).min(area.height.saturating_sub(9));
     let preview_height = if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
         let cmd = arena.cmd_str(arena_idx);
         calc_preview_height(cmd, area.width, max_preview_h)
@@ -473,14 +473,15 @@ pub fn render_frame(
         .direction(Direction::Vertical)
         .horizontal_margin(1)
         .constraints([
-            Constraint::Length(1),                  // 0: Top action buttons
-            Constraint::Min(3),                     // 1: History list
-            Constraint::Length(preview_height),     // 2: Preview box [Date] [path]
-            Constraint::Length(3),                  // 3: Search Query box [G] [111/111] (bottom)
+            Constraint::Length(1),                  // 0: Top breathing room from ceiling
+            Constraint::Length(1),                  // 1: Action buttons
+            Constraint::Min(3),                     // 2: History list [G] [count]
+            Constraint::Length(preview_height),     // 3: Preview box [Date] [path]
+            Constraint::Length(3),                  // 4: Search Query box (bottom)
         ])
         .split(area);
 
-    // 0. Top Action Buttons
+    // 1. Action Buttons
     let items = [
         ("[Esc]", " Exit"),
         ("[^G]", " Scope"),
@@ -497,11 +498,11 @@ pub fn render_frame(
     }
     f.render_widget(
         Line::from(header_spans).alignment(Alignment::Center),
-        chunks[0],
+        chunks[1],
     );
 
-    // 1. History List
-    let history_inner_height = chunks[1].height.saturating_sub(2) as usize;
+    // 2. History List
+    let history_inner_height = chunks[2].height.saturating_sub(2) as usize;
     let mut history_lines = Vec::with_capacity(history_inner_height);
 
     for row_idx in 0..history_inner_height {
@@ -545,14 +546,45 @@ pub fn render_frame(
         }
     }
 
+    let scope_char = match dash.scope {
+        Scope::Local => "L",
+        Scope::Global => "G",
+    };
+    let scope_spans = vec![
+        Span::styled("[", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            scope_char,
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("]", Style::default().fg(Color::DarkGray)),
+    ];
+
+    let total = dash.result.indices.len();
+    let current = if total == 0 {
+        0
+    } else {
+        dash.selected.min(total.saturating_sub(1)) + 1
+    };
+    let count_str = format!("{current}/{total}");
+    let count_spans = vec![
+        Span::styled("[", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            count_str,
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("]", Style::default().fg(Color::DarkGray)),
+    ];
+
     let history_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title_top(Line::from(scope_spans).alignment(Alignment::Left))
+        .title_top(Line::from(count_spans).alignment(Alignment::Right));
     let history_widget = Paragraph::new(history_lines).block(history_block);
-    f.render_widget(history_widget, chunks[1]);
+    f.render_widget(history_widget, chunks[2]);
 
-    // 2. Preview Box
+    // 3. Preview Box
     let mut preview_lines = Vec::new();
     let (time_str, path_str) = if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
         let ts = arena.timestamps[arena_idx as usize];
@@ -564,7 +596,7 @@ pub fn render_frame(
 
     let time_spans = vec![
         Span::styled("[", Style::default().fg(Color::DarkGray)),
-        Span::styled(time_str, Style::default().fg(Color::Gray)),
+        Span::styled(time_str, Style::default().fg(Color::DarkGray)),
         Span::styled("]", Style::default().fg(Color::DarkGray)),
     ];
     let path_spans = vec![
@@ -595,56 +627,25 @@ pub fn render_frame(
     let preview_widget = Paragraph::new(preview_lines)
         .block(preview_block)
         .scroll((preview_scroll_u16, 0));
-    f.render_widget(preview_widget, chunks[2]);
+    f.render_widget(preview_widget, chunks[3]);
 
-    // 3. Search Query Box (bottom)
-    let scope_char = match dash.scope {
-        Scope::Local => "L",
-        Scope::Global => "G",
-    };
-    let scope_spans = vec![
-        Span::styled("[", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            scope_char,
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("]", Style::default().fg(Color::DarkGray)),
-    ];
-
-    let total = dash.result.indices.len();
-    let current = if total == 0 {
-        0
-    } else {
-        dash.selected.min(total.saturating_sub(1)) + 1
-    };
-    let count_str = format!("{current}/{total}");
-    let count_spans = vec![
-        Span::styled("[", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            count_str,
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("]", Style::default().fg(Color::DarkGray)),
-    ];
-
+    // 4. Search Query Box (bottom)
     let query_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title_top(Line::from(scope_spans).alignment(Alignment::Left))
-        .title_top(Line::from(count_spans).alignment(Alignment::Right));
+        .border_style(Style::default().fg(Color::DarkGray));
 
     let query_line = Line::from(vec![
         Span::styled(" ", Style::default().fg(Color::DarkGray)),
         Span::raw(&dash.query),
     ]);
     let query_widget = Paragraph::new(query_line).block(query_block);
-    f.render_widget(query_widget, chunks[3]);
+    f.render_widget(query_widget, chunks[4]);
 
     // Position hardware cursor
     #[allow(clippy::cast_possible_truncation)]
-    let cursor_x = (chunks[3].x + 3 + dash.cursor as u16).min(chunks[3].x + chunks[3].width.saturating_sub(2));
-    let cursor_y = chunks[3].y + 1;
+    let cursor_x = (chunks[4].x + 3 + dash.cursor as u16).min(chunks[4].x + chunks[4].width.saturating_sub(2));
+    let cursor_y = chunks[4].y + 1;
     f.set_cursor_position((cursor_x, cursor_y));
 }
 
@@ -672,14 +673,14 @@ pub fn run_tui(
 
     let outcome = loop {
         if dash.dirty {
-            let max_preview_h = (dash.height / 2).clamp(6, 20).min(dash.height.saturating_sub(8));
+            let max_preview_h = (dash.height / 2).clamp(6, 20).min(dash.height.saturating_sub(9));
             let preview_h = if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
                 let cmd = arena.cmd_str(arena_idx);
                 calc_preview_height(cmd, dash.width, max_preview_h)
             } else {
                 3.min(max_preview_h)
             };
-            let history_total_h = dash.height.saturating_sub(4 + preview_h);
+            let history_total_h = dash.height.saturating_sub(5 + preview_h);
             let visible_rows = history_total_h.saturating_sub(2) as usize;
             dash.update_viewport(visible_rows, config.scroll_off);
 
