@@ -2,6 +2,8 @@ mod arena;
 mod error;
 #[allow(dead_code)]
 mod record;
+#[allow(dead_code)]
+mod search;
 
 use error::Error;
 
