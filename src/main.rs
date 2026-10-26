@@ -4,6 +4,8 @@ mod error;
 mod record;
 #[allow(dead_code)]
 mod search;
+#[allow(dead_code)]
+mod syntax;
 
 use error::Error;
 
