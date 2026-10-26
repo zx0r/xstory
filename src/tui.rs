@@ -479,11 +479,11 @@ pub fn render_frame(
                 line_spans.push(Span::raw("  "));
             }
 
-            // Exit code status dot
-            if exit_code == 0 {
-                line_spans.push(Span::styled("✔ ", Style::default().fg(Color::Green)));
-            } else {
+            // Exit code status marker: only errors are highlighted to eliminate visual noise
+            if exit_code != 0 {
                 line_spans.push(Span::styled("✘ ", Style::default().fg(Color::Red)));
+            } else {
+                line_spans.push(Span::raw("  "));
             }
 
             // Command syntax spans
