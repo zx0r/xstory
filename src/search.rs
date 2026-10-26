@@ -57,6 +57,7 @@ pub struct SearchResult {
 }
 
 impl SearchResult {
+    #[must_use]
     pub const fn empty() -> Self {
         Self { indices: Vec::new(), total: 0 }
     }
@@ -201,6 +202,7 @@ fn search_parallel(
 
 /// Execute search pipeline: bitmask prune → nucleo fuzzy → Top-K heap.
 /// Borrows Arena immutably. Returns owned `SearchResult` (`Vec<u32>` of indices).
+#[must_use]
 #[allow(clippy::cast_possible_truncation)]
 pub fn search(arena: &Arena, query: &str, scope: Scope) -> SearchResult {
     let indices = arena.scope_indices(scope);

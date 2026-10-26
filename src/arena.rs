@@ -57,6 +57,7 @@ pub enum Theme {
 }
 
 /// Application configuration.
+///
 /// Loaded once at startup via `Config::load()`.
 /// File format: plain `key = value` lines, `#` comments, blank lines ignored.
 /// Env vars override file values. Compiled-in defaults as final fallback.
@@ -91,6 +92,7 @@ pub struct Arena {
 
 // ── FNV-1a ───────────────────────────────────────────────────────
 
+#[must_use]
 #[inline]
 pub fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -260,6 +262,7 @@ fn unescape_into(s: &[u8], buf: &mut Vec<u8>) -> (u32, usize) {
 
 /// Compute 64-bit character bitmask for fast-reject filtering.
 /// Each byte maps to one of 64 bits via `b & 63`.
+#[must_use]
 pub fn char_mask(s: &[u8]) -> u64 {
     let mut mask: u64 = 0;
     for &b in s {
@@ -274,6 +277,9 @@ impl Arena {
     /// Load history from file path. Single allocation boundary.
     /// Returns Arena with all columns populated, corrupted lines silently skipped.
     /// If the file is missing or empty, returns an empty Arena (not an error).
+    ///
+    /// # Errors
+    /// Returns `Error::Io` if opening or mapping the file fails.
     #[allow(clippy::similar_names, clippy::cast_possible_truncation)]
     pub fn load(path: &Path, local_cwd: Option<&str>) -> Result<Self, crate::error::Error> {
         let mut arena = Self {
@@ -427,11 +433,13 @@ impl Arena {
     }
 
     /// Resolve a command `ByteView` by column index to the actual byte slice.
+    #[must_use]
     pub fn cmd_bytes(&self, idx: u32) -> &[u8] {
         self.resolve_bv(&self.commands[idx as usize])
     }
 
     /// Resolve a cwd `ByteView` by column index to the actual byte slice.
+    #[must_use]
     pub fn cwd_bytes(&self, idx: u32) -> &[u8] {
         self.resolve_bv(&self.cwds[idx as usize])
     }
@@ -459,6 +467,7 @@ impl Arena {
     }
 
     /// Resolve command at index → `&str` (unchecked UTF-8, validated at parse time).
+    #[must_use]
     #[inline]
     pub fn cmd_str(&self, idx: u32) -> &str {
         // SAFETY: TSV parse validates UTF-8 at ingestion boundary.
@@ -466,6 +475,7 @@ impl Arena {
     }
 
     /// Resolve cwd at index → `&str`.
+    #[must_use]
     #[inline]
     pub fn cwd_str(&self, idx: u32) -> &str {
         // SAFETY: TSV parse validates UTF-8 at ingestion boundary.
@@ -473,6 +483,7 @@ impl Arena {
     }
 
     /// Get the deduplicated indices slice for the active scope.
+    #[must_use]
     pub fn scope_indices(&self, scope: Scope) -> &[u32] {
         match scope {
             Scope::Global => &self.global_indices,
@@ -481,11 +492,13 @@ impl Arena {
     }
 
     /// Total raw entry count.
+    #[must_use]
     pub const fn len(&self) -> usize {
         self.commands.len()
     }
 
     /// Whether the arena has no entries.
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
@@ -495,6 +508,7 @@ impl Arena {
 
 impl Config {
     /// Load config: env vars → `~/.config/xstory/config` → compiled-in defaults.
+    #[must_use]
     pub fn load() -> Self {
         let mut cfg = Self::defaults();
 
