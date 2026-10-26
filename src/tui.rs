@@ -534,7 +534,10 @@ pub fn render_frame(
             header_spans.push(Span::raw("   "));
         }
         header_spans.push(Span::styled(*key, Style::default().fg(Color::DarkGray)));
-        header_spans.push(Span::styled(*desc, Style::default().fg(Color::DarkGray)));
+        header_spans.push(Span::styled(
+            *desc,
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        ));
     }
     f.render_widget(
         Line::from(header_spans).alignment(Alignment::Center),
@@ -551,7 +554,6 @@ pub fn render_frame(
         if item_idx < dash.result.indices.len() {
             let arena_idx = dash.result.indices[item_idx];
             let cmd = arena.cmd_str(arena_idx);
-            let exit_code = arena.exit_codes[arena_idx as usize];
             let is_selected = item_idx == dash.selected;
 
             let spans_syntax = syntax::tokenize(token_cache, cmd);
@@ -567,13 +569,8 @@ pub fn render_frame(
                 line_spans.push(Span::raw("  "));
             }
 
-            // Command syntax spans: unselected failed commands are dimmed to DarkGray
+            // Command syntax spans: preserved across all rows without flipping state on selection
             let mut highlighted = build_highlighted_spans(cmd, spans_syntax, dash.theme);
-            if exit_code != 0 && !is_selected {
-                for s in &mut highlighted {
-                    s.style = Style::default().fg(Color::DarkGray);
-                }
-            }
             if is_selected {
                 for s in &mut highlighted {
                     s.style = s.style.add_modifier(Modifier::BOLD | Modifier::ITALIC);
@@ -623,7 +620,7 @@ pub fn render_frame(
     } else {
         dash.selected.min(total.saturating_sub(1)) + 1
     };
-    let count_str = format!("{} / {}", format_thousands(current), format_thousands(total));
+    let count_str = format!("{}/{}", format_thousands(current), format_thousands(total));
     let count_spans = vec![
         Span::styled("[", Style::default().fg(Color::DarkGray)),
         Span::styled(count_str, Style::default().fg(Color::DarkGray)),
@@ -651,12 +648,18 @@ pub fn render_frame(
 
     let time_spans = vec![
         Span::styled("[", Style::default().fg(Color::DarkGray)),
-        Span::styled(time_str, Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            time_str,
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        ),
         Span::styled("]", Style::default().fg(Color::DarkGray)),
     ];
     let path_spans = vec![
         Span::styled("[", Style::default().fg(Color::DarkGray)),
-        Span::styled(path_str, Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            path_str,
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        ),
         Span::styled("]", Style::default().fg(Color::DarkGray)),
     ];
 

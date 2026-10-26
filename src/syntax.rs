@@ -211,20 +211,20 @@ pub fn style_for(kind: TokenKind, theme: Theme) -> Style {
     match theme {
         Theme::Dark => match kind {
             TokenKind::Command => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            TokenKind::Flag => Style::default().fg(Color::Yellow),
-            TokenKind::String => Style::default().fg(Color::Green),
+            TokenKind::Flag => Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC),
+            TokenKind::String => Style::default().fg(Color::Green).add_modifier(Modifier::ITALIC),
             TokenKind::Variable => Style::default().fg(Color::Magenta),
             TokenKind::Operator => Style::default().fg(Color::LightRed),
-            TokenKind::Comment => Style::default().fg(Color::DarkGray),
+            TokenKind::Comment => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
             TokenKind::Plain => Style::default().fg(Color::White),
         },
         Theme::Light => match kind {
             TokenKind::Command => Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
-            TokenKind::Flag => Style::default().fg(Color::Rgb(180, 100, 0)),
-            TokenKind::String => Style::default().fg(Color::Green),
+            TokenKind::Flag => Style::default().fg(Color::Rgb(180, 100, 0)).add_modifier(Modifier::ITALIC),
+            TokenKind::String => Style::default().fg(Color::Green).add_modifier(Modifier::ITALIC),
             TokenKind::Variable => Style::default().fg(Color::Magenta),
             TokenKind::Operator => Style::default().fg(Color::Red),
-            TokenKind::Comment => Style::default().fg(Color::Gray),
+            TokenKind::Comment => Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC),
             TokenKind::Plain => Style::default().fg(Color::Black),
         },
     }
