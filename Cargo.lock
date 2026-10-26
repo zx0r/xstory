@@ -1170,6 +1170,7 @@ dependencies = [
  "assert_cmd",
  "criterion",
  "crossterm",
+ "libc",
  "memchr",
  "memmap2",
  "nucleo-matcher",

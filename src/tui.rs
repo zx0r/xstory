@@ -336,21 +336,37 @@ fn restore_terminal(
 
 // ── Formatting Helpers ───────────────────────────────────────────
 
-fn format_relative_time(timestamp_ms: i64) -> String {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-    let diff_ms = now_ms.saturating_sub(timestamp_ms);
-    let secs = diff_ms / 1000;
-    if secs < 60 {
-        "<1m".to_owned()
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h", secs / 3600)
-    } else {
-        format!("{}d", secs / 86400)
+#[allow(clippy::cast_possible_truncation, clippy::borrow_as_ptr)]
+#[must_use]
+pub fn format_timestamp(timestamp_ms: i64) -> String {
+    let secs = (timestamp_ms / 1000) as libc::time_t;
+    let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
+
+    #[cfg(unix)]
+    let success = unsafe {
+        !libc::localtime_r(&secs, tm.as_mut_ptr()).is_null()
+    };
+
+    #[cfg(windows)]
+    let success = unsafe {
+        libc::localtime_s(tm.as_mut_ptr(), &secs) == 0
+    };
+
+    if !success {
+        return "--:--".to_owned();
     }
+
+    // SAFETY: The function succeeded and fully initialized tm.
+    let tm = unsafe { tm.assume_init() };
+
+    let month = match tm.tm_mon {
+        0 => "Jan", 1 => "Feb", 2 => "Mar", 3 => "Apr",
+        4 => "May", 5 => "Jun", 6 => "Jul", 7 => "Aug",
+        8 => "Sep", 9 => "Oct", 10 => "Nov", 11 => "Dec",
+        _ => "???",
+    };
+
+    format!("{:02} {} {:02}:{:02}", tm.tm_mday, month, tm.tm_hour, tm.tm_min)
 }
 
 fn abbreviate_path(path: &str) -> String {
@@ -365,6 +381,25 @@ fn abbreviate_path(path: &str) -> String {
         }
     }
     path.to_owned()
+}
+
+fn calc_preview_height(cmd: &str, width: u16, max_height: u16) -> u16 {
+    if max_height <= 2 {
+        return max_height;
+    }
+    if cmd.trim().is_empty() {
+        return 3.min(max_height);
+    }
+    let inner_width = width.saturating_sub(4).max(1);
+    let mut total_lines: u16 = 0;
+    for line in cmd.lines() {
+        #[allow(clippy::cast_possible_truncation)]
+        let char_count = line.chars().count() as u16;
+        let wrapped = char_count.max(1).div_ceil(inner_width);
+        total_lines = total_lines.saturating_add(wrapped);
+    }
+    let max_content = max_height.saturating_sub(2);
+    total_lines.clamp(1, max_content) + 2
 }
 
 // ── Frame Rendering ──────────────────────────────────────────────
@@ -426,17 +461,26 @@ pub fn render_frame(
         return;
     }
 
+    let max_preview_h = (area.height / 2).clamp(6, 20).min(area.height.saturating_sub(8));
+    let preview_height = if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
+        let cmd = arena.cmd_str(arena_idx);
+        calc_preview_height(cmd, area.width, max_preview_h)
+    } else {
+        3.min(max_preview_h)
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
+        .horizontal_margin(1)
         .constraints([
-            Constraint::Length(1),       // 0: Top Action buttons: [Esc] Exit   [^G] Scope   [↵] Run   [Tab] Edit
-            Constraint::Min(3),          // 1: History list
-            Constraint::Length(8),       // 2: Preview box [Date] [path]
-            Constraint::Length(3),       // 3: Search input (bottom) [G] [111/111]
+            Constraint::Length(1),                  // 0: Top action buttons
+            Constraint::Min(3),                     // 1: History list
+            Constraint::Length(preview_height),     // 2: Preview box [Date] [path]
+            Constraint::Length(3),                  // 3: Search Query box [G] [111/111] (bottom)
         ])
         .split(area);
 
-    // 0. Top Action Buttons (centered, DarkGray)
+    // 0. Top Action Buttons
     let items = [
         ("[Esc]", " Exit"),
         ("[^G]", " Scope"),
@@ -471,11 +515,11 @@ pub fn render_frame(
             let spans_syntax = syntax::tokenize(token_cache, cmd);
             let mut line_spans = Vec::new();
 
-            // Cursor prefix
+            // Cursor prefix: "▎ " for selected, "  " for unselected
             if is_selected {
                 line_spans.push(Span::styled(
-                    "> ",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    "▎ ",
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
                 ));
             } else {
                 line_spans.push(Span::raw("  "));
@@ -513,7 +557,7 @@ pub fn render_frame(
     let (time_str, path_str) = if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
         let ts = arena.timestamps[arena_idx as usize];
         let cwd = arena.cwd_str(arena_idx);
-        (format_relative_time(ts), abbreviate_path(cwd))
+        (format_timestamp(ts), abbreviate_path(cwd))
     } else {
         ("--:--".to_owned(), String::new())
     };
@@ -628,8 +672,15 @@ pub fn run_tui(
 
     let outcome = loop {
         if dash.dirty {
-            let history_inner_height = dash.height.saturating_sub(4) as usize * 55 / 100;
-            let visible_rows = history_inner_height.saturating_sub(2);
+            let max_preview_h = (dash.height / 2).clamp(6, 20).min(dash.height.saturating_sub(8));
+            let preview_h = if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
+                let cmd = arena.cmd_str(arena_idx);
+                calc_preview_height(cmd, dash.width, max_preview_h)
+            } else {
+                3.min(max_preview_h)
+            };
+            let history_total_h = dash.height.saturating_sub(4 + preview_h);
+            let visible_rows = history_total_h.saturating_sub(2) as usize;
             dash.update_viewport(visible_rows, config.scroll_off);
 
             terminal.draw(|f| {
@@ -960,5 +1011,13 @@ mod tests {
         terminal.draw(|f| {
             render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache);
         }).expect("draw");
+    }
+
+    #[test]
+    fn format_timestamp_validation() {
+        let ts = 1_729_975_440_000_i64; // 2024-10-26
+        let formatted = format_timestamp(ts);
+        assert_ne!(formatted, "--:--");
+        assert_eq!(formatted.len(), 12); // "DD Mmm HH:MM"
     }
 }
