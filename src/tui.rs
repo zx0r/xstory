@@ -4,7 +4,7 @@
 use std::io::Write;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-use ratatui::layout::{Alignment, Constraint, Direction, Layout};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap};
@@ -25,11 +25,22 @@ pub enum Outcome {
     Cancel,          // exit 130
 }
 
+/// Focused panel in the TUI dashboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusedPanel {
+    Query,
+    History,
+    Preview,
+}
+
 /// The entire TUI state. Owned by `run_tui`, mutated in-place.
 pub struct Dashboard {
     // --- input ---
     pub query:           String,
     pub cursor:          usize,
+
+    // --- focus ---
+    pub focus:           FocusedPanel,
 
     // --- search ---
     pub scope:           Scope,
@@ -69,6 +80,7 @@ impl Dashboard {
         Self {
             query,
             cursor,
+            focus: FocusedPanel::Query,
             scope,
             result,
             dedup_total,
@@ -399,23 +411,77 @@ fn format_thousands(n: usize) -> String {
     out
 }
 
-fn calc_preview_height(cmd: &str, width: u16, max_height: u16) -> u16 {
-    if max_height <= 2 {
-        return max_height;
+// ── Unified Master Layout & Box Model ────────────────────────────
+
+pub const TOP_BREATHING_ROOM: u16 = 1;
+pub const ACTION_BAR_HEIGHT: u16 = 1;
+pub const PREVIEW_PANEL_HEIGHT: u16 = 6;
+pub const QUERY_BAR_HEIGHT: u16 = 3;
+
+pub const HORIZONTAL_MARGIN: u16 = 1;
+pub const PANEL_PADDING_HORIZONTAL: u16 = 1;
+pub const PANEL_PADDING: Padding = Padding::horizontal(PANEL_PADDING_HORIZONTAL);
+
+/// Master layout chunks derived from a single vertical split hierarchy.
+#[derive(Debug, Clone, Copy)]
+pub struct MasterLayout {
+    pub ceiling: Rect,
+    pub actions: Rect,
+    pub history: Rect,
+    pub preview: Rect,
+    pub query:   Rect,
+}
+
+/// Compute master layout tree with strict static heights to guarantee zero jitter.
+#[must_use]
+pub fn compute_master_layout(area: Rect) -> MasterLayout {
+    let preview_height = if area.height >= 14 {
+        PREVIEW_PANEL_HEIGHT
+    } else {
+        PREVIEW_PANEL_HEIGHT.min(area.height.saturating_sub(8))
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .horizontal_margin(HORIZONTAL_MARGIN)
+        .constraints([
+            Constraint::Length(TOP_BREATHING_ROOM),
+            Constraint::Length(ACTION_BAR_HEIGHT),
+            Constraint::Min(3),                      // History List (flexible flex)
+            Constraint::Length(preview_height),      // Preview Panel (strictly static)
+            Constraint::Length(QUERY_BAR_HEIGHT),    // Query Bar (fixed height: 3)
+        ])
+        .split(area);
+
+    MasterLayout {
+        ceiling: chunks[0],
+        actions: chunks[1],
+        history: chunks[2],
+        preview: chunks[3],
+        query:   chunks[4],
     }
-    if cmd.trim().is_empty() {
-        return 3.min(max_height);
-    }
-    let inner_width = width.saturating_sub(6).max(1);
-    let mut total_lines: u16 = 0;
-    for line in cmd.lines() {
-        #[allow(clippy::cast_possible_truncation)]
-        let char_count = line.chars().count() as u16;
-        let wrapped = char_count.max(1).div_ceil(inner_width);
-        total_lines = total_lines.saturating_add(wrapped);
-    }
-    let max_content = max_height.saturating_sub(2);
-    total_lines.clamp(1, max_content) + 2
+}
+
+/// Focus state for styling panel borders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelFocus {
+    Focused,
+    Unfocused,
+}
+
+/// Create a unified panel block with standard borders, rounded corners, and unified padding.
+#[must_use]
+pub fn create_panel_block(focus: PanelFocus) -> Block<'static> {
+    let border_color = match focus {
+        PanelFocus::Focused => Color::Cyan,
+        PanelFocus::Unfocused => Color::DarkGray,
+    };
+
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .padding(PANEL_PADDING)
 }
 
 fn split_spans_into_lines(spans: Vec<Span<'_>>) -> Vec<Line<'_>> {
@@ -501,25 +567,7 @@ pub fn render_frame(
         return;
     }
 
-    let max_preview_h = (area.height / 2).clamp(6, 20).min(area.height.saturating_sub(9));
-    let preview_height = if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
-        let cmd = arena.cmd_str(arena_idx);
-        calc_preview_height(cmd, area.width, max_preview_h)
-    } else {
-        3.min(max_preview_h)
-    };
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .horizontal_margin(1)
-        .constraints([
-            Constraint::Length(1),                  // 0: Top breathing room from ceiling
-            Constraint::Length(1),                  // 1: Action buttons
-            Constraint::Min(3),                     // 2: History list [G] [count]
-            Constraint::Length(preview_height),     // 3: Preview box [Date] [path]
-            Constraint::Length(3),                  // 4: Search Query box (bottom)
-        ])
-        .split(area);
+    let layout = compute_master_layout(area);
 
     // 1. Action Buttons
     let items = [
@@ -541,61 +589,15 @@ pub fn render_frame(
     }
     f.render_widget(
         Line::from(header_spans).alignment(Alignment::Center),
-        chunks[1],
+        layout.actions,
     );
 
     // 2. History List
-    let history_inner_height = chunks[2].height.saturating_sub(2) as usize;
-    let history_inner_width = chunks[2].width.saturating_sub(2) as usize;
-    let mut history_lines = Vec::with_capacity(history_inner_height);
-
-    for row_idx in 0..history_inner_height {
-        let item_idx = dash.viewport_offset + row_idx;
-        if item_idx < dash.result.indices.len() {
-            let arena_idx = dash.result.indices[item_idx];
-            let cmd = arena.cmd_str(arena_idx);
-            let is_selected = item_idx == dash.selected;
-
-            let spans_syntax = syntax::tokenize(token_cache, cmd);
-            let mut line_spans = Vec::new();
-
-            // Cursor prefix
-            if is_selected {
-                line_spans.push(Span::styled(
-                    "> ",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                ));
-            } else {
-                line_spans.push(Span::raw("  "));
-            }
-
-            // Command syntax spans: preserved identically without mutating style on selection
-            let mut highlighted = build_highlighted_spans(cmd, spans_syntax, dash.theme);
-            line_spans.append(&mut highlighted);
-
-            // Pad row across the entire width of the panel
-            let used_width: usize = 2 + cmd.chars().count();
-            let padding_count = history_inner_width.saturating_sub(used_width);
-            if padding_count > 0 {
-                line_spans.push(Span::raw(" ".repeat(padding_count)));
-            }
-
-            if is_selected {
-                let sel_bg = match dash.theme {
-                    Theme::Dark => Color::DarkGray,
-                    Theme::Light => Color::Gray,
-                };
-                for span in &mut line_spans {
-                    span.style = span.style.bg(sel_bg);
-                }
-            }
-
-            history_lines.push(Line::from(line_spans));
-        } else {
-            history_lines.push(Line::raw(""));
-        }
-    }
-
+    let history_focus = if dash.focus == FocusedPanel::History {
+        PanelFocus::Focused
+    } else {
+        PanelFocus::Unfocused
+    };
     let scope_char = match dash.scope {
         Scope::Local => "L",
         Scope::Global => "G",
@@ -622,16 +624,71 @@ pub fn render_frame(
         Span::styled("]", Style::default().fg(Color::DarkGray)),
     ];
 
-    let history_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
+    let history_block = create_panel_block(history_focus)
         .title_top(Line::from(scope_spans).alignment(Alignment::Left))
         .title_top(Line::from(count_spans).alignment(Alignment::Right));
+
+    let history_inner = history_block.inner(layout.history);
+    let history_inner_height = history_inner.height as usize;
+    let history_inner_width = history_inner.width as usize;
+    let mut history_lines = Vec::with_capacity(history_inner_height);
+
+    for row_idx in 0..history_inner_height {
+        let item_idx = dash.viewport_offset + row_idx;
+        if item_idx < dash.result.indices.len() {
+            let arena_idx = dash.result.indices[item_idx];
+            let cmd = arena.cmd_str(arena_idx);
+            let is_selected = item_idx == dash.selected;
+
+            let spans_syntax = syntax::tokenize(token_cache, cmd);
+            let mut line_spans = Vec::new();
+
+            // Cursor prefix
+            if is_selected {
+                line_spans.push(Span::styled(
+                    "> ",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                line_spans.push(Span::raw("  "));
+            }
+
+            // Command syntax spans: preserved identically without mutating style on selection
+            let mut highlighted = build_highlighted_spans(cmd, spans_syntax, dash.theme);
+            line_spans.append(&mut highlighted);
+
+            // Pad row across the entire inner width of the panel
+            let used_width: usize = 2 + cmd.chars().count();
+            let padding_count = history_inner_width.saturating_sub(used_width);
+            if padding_count > 0 {
+                line_spans.push(Span::raw(" ".repeat(padding_count)));
+            }
+
+            if is_selected {
+                let sel_bg = match dash.theme {
+                    Theme::Dark => Color::DarkGray,
+                    Theme::Light => Color::Gray,
+                };
+                for span in &mut line_spans {
+                    span.style = span.style.bg(sel_bg);
+                }
+            }
+
+            history_lines.push(Line::from(line_spans));
+        } else {
+            history_lines.push(Line::raw(""));
+        }
+    }
+
     let history_widget = Paragraph::new(history_lines).block(history_block);
-    f.render_widget(history_widget, chunks[2]);
+    f.render_widget(history_widget, layout.history);
 
     // 3. Preview Box
+    let preview_focus = if dash.focus == FocusedPanel::Preview {
+        PanelFocus::Focused
+    } else {
+        PanelFocus::Unfocused
+    };
     let mut preview_lines = Vec::new();
     let (time_str, path_str) = if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
         let ts = arena.timestamps[arena_idx as usize];
@@ -658,11 +715,7 @@ pub fn render_frame(
         Span::styled("]", Style::default().fg(Color::DarkGray)),
     ];
 
-    let preview_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .padding(Padding::horizontal(1))
+    let mut preview_block = create_panel_block(preview_focus)
         .title_top(Line::from(time_spans).alignment(Alignment::Left))
         .title_top(Line::from(path_spans).alignment(Alignment::Right));
 
@@ -673,31 +726,68 @@ pub fn render_frame(
         preview_lines = split_spans_into_lines(raw_spans);
     }
 
+    let preview_inner = preview_block.inner(layout.preview);
+    let visual_rows: usize = preview_lines
+        .iter()
+        .map(|l| {
+            let w = l.width();
+            if preview_inner.width > 0 && w > preview_inner.width as usize {
+                w.div_ceil(preview_inner.width as usize)
+            } else {
+                1
+            }
+        })
+        .sum();
+
     #[allow(clippy::cast_possible_truncation)]
-    let preview_scroll_u16 = dash.preview_scroll as u16;
+    let max_scroll = (visual_rows as u16).saturating_sub(preview_inner.height);
+    #[allow(clippy::cast_possible_truncation)]
+    let preview_scroll_u16 = (dash.preview_scroll as u16).min(max_scroll);
+
+    if visual_rows > preview_inner.height as usize {
+        preview_block = preview_block.title_bottom(
+            Line::from(vec![
+                Span::styled("[", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{}/{} • Alt+↓/↑ scroll", preview_scroll_u16 + 1, visual_rows),
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                ),
+                Span::styled("]", Style::default().fg(Color::DarkGray)),
+            ])
+            .alignment(Alignment::Right),
+        );
+    }
+
     let preview_widget = Paragraph::new(preview_lines)
         .block(preview_block)
         .wrap(Wrap { trim: false })
         .scroll((preview_scroll_u16, 0));
-    f.render_widget(preview_widget, chunks[3]);
+    f.render_widget(preview_widget, layout.preview);
 
     // 4. Search Query Box (bottom)
-    let query_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray));
+    let query_focus = if dash.focus == FocusedPanel::Query {
+        PanelFocus::Focused
+    } else {
+        PanelFocus::Unfocused
+    };
+    let query_block = create_panel_block(query_focus);
+    let query_inner = query_block.inner(layout.query);
 
+    let prompt_icon = " ";
     let query_line = Line::from(vec![
-        Span::styled(" ", Style::default().fg(Color::DarkGray)),
+        Span::styled(prompt_icon, Style::default().fg(Color::DarkGray)),
         Span::raw(&dash.query),
     ]);
     let query_widget = Paragraph::new(query_line).block(query_block);
-    f.render_widget(query_widget, chunks[4]);
+    f.render_widget(query_widget, layout.query);
 
-    // Position hardware cursor
+    // Position hardware cursor strictly derived from query_inner (never manual magic offsets!)
     #[allow(clippy::cast_possible_truncation)]
-    let cursor_x = (chunks[4].x + 3 + dash.cursor as u16).min(chunks[4].x + chunks[4].width.saturating_sub(2));
-    let cursor_y = chunks[4].y + 1;
+    let prompt_width = prompt_icon.chars().count() as u16;
+    #[allow(clippy::cast_possible_truncation)]
+    let cursor_x = (query_inner.x + prompt_width + dash.cursor as u16)
+        .min(query_inner.x + query_inner.width.saturating_sub(1));
+    let cursor_y = query_inner.y;
     f.set_cursor_position((cursor_x, cursor_y));
 }
 
@@ -725,15 +815,9 @@ pub fn run_tui(
 
     let outcome = loop {
         if dash.dirty {
-            let max_preview_h = (dash.height / 2).clamp(6, 20).min(dash.height.saturating_sub(9));
-            let preview_h = if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
-                let cmd = arena.cmd_str(arena_idx);
-                calc_preview_height(cmd, dash.width, max_preview_h)
-            } else {
-                3.min(max_preview_h)
-            };
-            let history_total_h = dash.height.saturating_sub(5 + preview_h);
-            let visible_rows = history_total_h.saturating_sub(2) as usize;
+            let layout = compute_master_layout(Rect::new(0, 0, dash.width, dash.height));
+            let history_inner = create_panel_block(PanelFocus::Unfocused).inner(layout.history);
+            let visible_rows = history_inner.height as usize;
             dash.update_viewport(visible_rows, config.scroll_off);
 
             terminal.draw(|f| {
@@ -748,6 +832,7 @@ pub fn run_tui(
                 if modifiers == KeyModifiers::CONTROL {
                     match c {
                         'g' => {
+                            dash.focus = FocusedPanel::Query;
                             dash.toggle_scope();
                             dash.dedup_total = arena.scope_indices(dash.scope).len();
                             dash.result = search::search(arena, &dash.query, dash.scope);
@@ -755,30 +840,36 @@ pub fn run_tui(
                             dash.dirty = true;
                         }
                         'u' => {
+                            dash.focus = FocusedPanel::Query;
                             dash.delete_to_start();
                             dash.result = search::search(arena, &dash.query, dash.scope);
                             dash.selected = 0;
                             dash.dirty = true;
                         }
                         'w' => {
+                            dash.focus = FocusedPanel::Query;
                             dash.delete_word_before();
                             dash.result = search::search(arena, &dash.query, dash.scope);
                             dash.selected = 0;
                             dash.dirty = true;
                         }
                         'a' => {
+                            dash.focus = FocusedPanel::Query;
                             dash.move_cursor_home();
                             dash.dirty = true;
                         }
                         'e' => {
+                            dash.focus = FocusedPanel::Query;
                             dash.move_cursor_end();
                             dash.dirty = true;
                         }
                         'p' => {
+                            dash.focus = FocusedPanel::History;
                             dash.move_selection(-1);
                             dash.dirty = true;
                         }
                         'n' => {
+                            dash.focus = FocusedPanel::History;
                             dash.move_selection(1);
                             dash.dirty = true;
                         }
@@ -790,16 +881,19 @@ pub fn run_tui(
                 } else if modifiers == KeyModifiers::ALT {
                     match c {
                         'j' => {
+                            dash.focus = FocusedPanel::Preview;
                             dash.scroll_preview(1, 1000);
                             dash.dirty = true;
                         }
                         'k' => {
+                            dash.focus = FocusedPanel::Preview;
                             dash.scroll_preview(-1, 1000);
                             dash.dirty = true;
                         }
                         _ => {}
                     }
                 } else {
+                    dash.focus = FocusedPanel::Query;
                     dash.insert_char(c);
                     dash.result = search::search(arena, &dash.query, dash.scope);
                     dash.selected = 0;
@@ -807,24 +901,29 @@ pub fn run_tui(
                 }
             }
             Event::Key(KeyEvent { code: KeyCode::Backspace, .. }) => {
+                dash.focus = FocusedPanel::Query;
                 dash.delete_char_before();
                 dash.result = search::search(arena, &dash.query, dash.scope);
                 dash.selected = 0;
                 dash.dirty = true;
             }
             Event::Key(KeyEvent { code: KeyCode::Left, .. }) => {
+                dash.focus = FocusedPanel::Query;
                 dash.move_cursor_left();
                 dash.dirty = true;
             }
             Event::Key(KeyEvent { code: KeyCode::Right, .. }) => {
+                dash.focus = FocusedPanel::Query;
                 dash.move_cursor_right();
                 dash.dirty = true;
             }
             Event::Key(KeyEvent { code: KeyCode::Home, .. }) => {
+                dash.focus = FocusedPanel::Query;
                 dash.move_cursor_home();
                 dash.dirty = true;
             }
             Event::Key(KeyEvent { code: KeyCode::End, .. }) => {
+                dash.focus = FocusedPanel::Query;
                 dash.move_cursor_end();
                 dash.dirty = true;
             }
@@ -832,35 +931,43 @@ pub fn run_tui(
             // --- Navigation ---
             Event::Key(KeyEvent { code: KeyCode::Up, modifiers, .. }) => {
                 if modifiers == KeyModifiers::ALT {
+                    dash.focus = FocusedPanel::Preview;
                     dash.scroll_preview(-1, 1000);
                 } else {
+                    dash.focus = FocusedPanel::History;
                     dash.move_selection(-1);
                 }
                 dash.dirty = true;
             }
             Event::Key(KeyEvent { code: KeyCode::Down, modifiers, .. }) => {
                 if modifiers == KeyModifiers::ALT {
+                    dash.focus = FocusedPanel::Preview;
                     dash.scroll_preview(1, 1000);
                 } else {
+                    dash.focus = FocusedPanel::History;
                     dash.move_selection(1);
                 }
                 dash.dirty = true;
             }
             Event::Key(KeyEvent { code: KeyCode::PageUp, .. }) => {
+                dash.focus = FocusedPanel::History;
                 dash.move_selection(-10);
                 dash.dirty = true;
             }
             Event::Key(KeyEvent { code: KeyCode::PageDown, .. }) => {
+                dash.focus = FocusedPanel::History;
                 dash.move_selection(10);
                 dash.dirty = true;
             }
 
             // --- Mouse scroll support ---
             Event::Mouse(MouseEvent { kind: MouseEventKind::ScrollUp, .. }) => {
+                dash.focus = FocusedPanel::History;
                 dash.move_selection(-1);
                 dash.dirty = true;
             }
             Event::Mouse(MouseEvent { kind: MouseEventKind::ScrollDown, .. }) => {
+                dash.focus = FocusedPanel::History;
                 dash.move_selection(1);
                 dash.dirty = true;
             }
@@ -1082,5 +1189,54 @@ mod tests {
         assert_eq!(format_thousands(1000), "1,000");
         assert_eq!(format_thousands(50_000), "50,000");
         assert_eq!(format_thousands(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn master_layout_stability_and_zero_jitter() {
+        // Master layout must produce completely deterministic, static heights
+        // to prevent any layout jitter during navigation.
+        let area_normal = Rect::new(0, 0, 100, 30);
+        let layout_normal = compute_master_layout(area_normal);
+
+        assert_eq!(layout_normal.ceiling.height, TOP_BREATHING_ROOM);
+        assert_eq!(layout_normal.actions.height, ACTION_BAR_HEIGHT);
+        assert_eq!(layout_normal.preview.height, PREVIEW_PANEL_HEIGHT);
+        assert_eq!(layout_normal.query.height, QUERY_BAR_HEIGHT);
+        // History panel flexes to absorb the rest
+        assert_eq!(
+            layout_normal.history.height,
+            30 - (TOP_BREATHING_ROOM + ACTION_BAR_HEIGHT + PREVIEW_PANEL_HEIGHT + QUERY_BAR_HEIGHT)
+        );
+
+        // Terminal resize to larger window preserves static preview and query heights
+        let area_tall = Rect::new(0, 0, 100, 60);
+        let layout_tall = compute_master_layout(area_tall);
+        assert_eq!(layout_tall.preview.height, PREVIEW_PANEL_HEIGHT);
+        assert_eq!(layout_tall.query.height, QUERY_BAR_HEIGHT);
+
+        // Panel widths respect horizontal margin
+        assert_eq!(layout_normal.history.width, 100 - (2 * HORIZONTAL_MARGIN));
+        assert_eq!(layout_normal.preview.width, 100 - (2 * HORIZONTAL_MARGIN));
+        assert_eq!(layout_normal.query.width, 100 - (2 * HORIZONTAL_MARGIN));
+    }
+
+    #[test]
+    fn unified_panel_block_styling_and_focus() {
+        let focused_block = create_panel_block(PanelFocus::Focused);
+        let unfocused_block = create_panel_block(PanelFocus::Unfocused);
+
+        let area = Rect::new(0, 0, 80, 10);
+        let inner_focused = focused_block.inner(area);
+        let inner_unfocused = unfocused_block.inner(area);
+
+        // Both blocks must share identical box model and inner padding
+        assert_eq!(inner_focused, inner_unfocused);
+        assert_eq!(inner_focused.x, area.x + 1 + PANEL_PADDING_HORIZONTAL);
+        assert_eq!(inner_focused.y, area.y + 1);
+        assert_eq!(
+            inner_focused.width,
+            area.width - 2 - (2 * PANEL_PADDING_HORIZONTAL)
+        );
+        assert_eq!(inner_focused.height, area.height - 2);
     }
 }
