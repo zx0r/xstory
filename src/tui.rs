@@ -516,11 +516,11 @@ pub fn render_frame(
             let spans_syntax = syntax::tokenize(token_cache, cmd);
             let mut line_spans = Vec::new();
 
-            // Cursor prefix: "▎ " for selected, "  " for unselected
+            // Cursor prefix
             if is_selected {
                 line_spans.push(Span::styled(
-                    "▎ ",
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    "> ",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
                 ));
             } else {
                 line_spans.push(Span::raw("  "));
