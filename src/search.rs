@@ -52,6 +52,7 @@ fn parse_query(q: &str) -> QueryMode<'_> {
 /// Immutable search result: indices into Arena, sorted by score descending.
 pub struct SearchResult {
     pub indices: Vec<u32>,
+    #[allow(dead_code)]
     pub total:   u32,
 }
 

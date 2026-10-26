@@ -158,7 +158,7 @@ pub fn record(
 }
 
 /// Record with explicit path override (for testing).
-#[allow(clippy::cast_possible_wrap)]
+#[allow(dead_code, clippy::cast_possible_wrap)]
 pub fn record_to_path(
     cmd_parts: &[String],
     exit_code: i32,
