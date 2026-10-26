@@ -383,6 +383,22 @@ fn abbreviate_path(path: &str) -> String {
     path.to_owned()
 }
 
+fn format_thousands(n: usize) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let commas = (len.saturating_sub(1)) / 3;
+    let mut out = String::with_capacity(len + commas);
+
+    for (i, &b) in bytes.iter().enumerate() {
+        if i > 0 && (len - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(b as char);
+    }
+    out
+}
+
 fn calc_preview_height(cmd: &str, width: u16, max_height: u16) -> u16 {
     if max_height <= 2 {
         return max_height;
@@ -607,13 +623,10 @@ pub fn render_frame(
     } else {
         dash.selected.min(total.saturating_sub(1)) + 1
     };
-    let count_str = format!("{current}/{total}");
+    let count_str = format!("{} / {}", format_thousands(current), format_thousands(total));
     let count_spans = vec![
         Span::styled("[", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            count_str,
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(count_str, Style::default().fg(Color::DarkGray)),
         Span::styled("]", Style::default().fg(Color::DarkGray)),
     ];
 
@@ -1061,5 +1074,15 @@ mod tests {
         let formatted = format_timestamp(ts);
         assert_ne!(formatted, "--:--");
         assert_eq!(formatted.len(), 12); // "DD Mmm HH:MM"
+    }
+
+    #[test]
+    fn format_thousands_formatting() {
+        assert_eq!(format_thousands(0), "0");
+        assert_eq!(format_thousands(1), "1");
+        assert_eq!(format_thousands(999), "999");
+        assert_eq!(format_thousands(1000), "1,000");
+        assert_eq!(format_thousands(50_000), "50,000");
+        assert_eq!(format_thousands(1_234_567), "1,234,567");
     }
 }
