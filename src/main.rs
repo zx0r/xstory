@@ -103,7 +103,7 @@ mod signals {
     use std::io::Write;
 
     unsafe extern "C" {
-        fn signal(sig: i32, handler: extern "C" fn(i32)) -> extern "C" fn(i32);
+        fn signal(sig: i32, handler: usize) -> usize;
         fn raise(sig: i32) -> i32;
     }
 
@@ -124,19 +124,17 @@ mod signals {
         );
         let _ = stderr.flush();
 
-        // SAFETY: reset disposition to default (SIG_DFL) and raise signal so parent shell gets real signal
         unsafe {
-            signal(sig, std::mem::transmute::<usize, extern "C" fn(i32)>(SIG_DFL));
+            signal(sig, SIG_DFL);
             let _ = raise(sig);
         }
     }
 
     pub fn install() {
-        // SAFETY: standard C POSIX signal installation for graceful terminal restoration on exit
         unsafe {
-            signal(SIGINT, handle_signal);
-            signal(SIGTERM, handle_signal);
-            signal(SIGWINCH, std::mem::transmute::<usize, extern "C" fn(i32)>(SIG_IGN));
+            signal(SIGINT, handle_signal as *const () as usize);
+            signal(SIGTERM, handle_signal as *const () as usize);
+            signal(SIGWINCH, SIG_IGN);
         }
     }
 }
@@ -368,12 +366,12 @@ fn run() -> Result<(), Error> {
 
             match outcome {
                 tui::Outcome::Execute(cmd) => {
-                    println!("{cmd}");
+                    print!("{cmd}");
                     let _ = std::io::stdout().flush();
                     std::process::exit(0);
                 }
                 tui::Outcome::Edit(cmd) => {
-                    println!("{cmd}");
+                    print!("{cmd}");
                     let _ = std::io::stdout().flush();
                     std::process::exit(2);
                 }

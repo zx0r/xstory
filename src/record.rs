@@ -111,63 +111,20 @@ pub fn record(
     cwd: Option<&str>,
     config: &Config,
 ) -> Result<(), crate::error::Error> {
-    let cmd = cmd_parts.join(" ");
-
-    let (final_cmd, is_masked) = match evaluate(&cmd, config) {
-        Verdict::Deny => return Ok(()),
-        Verdict::Allow => (cmd, false),
-        Verdict::Mask => (mask_command(&cmd, config), true),
+    let cwd_env = if cwd.is_none() {
+        std::env::var("PWD").ok()
+    } else {
+        None
     };
-    let _ = is_masked;
-
-    let cwd = cwd
-        .or_else(|| std::env::var("PWD").ok().as_deref().map(|_| "?"))
-        .unwrap_or("?");
-    let actual_cwd = std::env::var("PWD").unwrap_or_else(|_| cwd.to_owned());
-    let cwd_ref = if cwd == "?" { &actual_cwd } else { cwd };
-
-    let timestamp_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-
-    // Pre-allocate: generous capacity to avoid reallocs
-    let mut buf = Vec::with_capacity(64 + final_cmd.len() + cwd_ref.len());
-
-    // timestamp
-    write_i64(&mut buf, timestamp_ms);
-    buf.push(b'\t');
-
-    // duration
-    write_u64(&mut buf, duration_ms);
-    buf.push(b'\t');
-
-    // exit code
-    write_i32(&mut buf, exit_code);
-    buf.push(b'\t');
-
-    // cwd (escaped)
-    escape_into(cwd_ref, &mut buf);
-    buf.push(b'\t');
-
-    // command (escaped)
-    escape_into(&final_cmd, &mut buf);
-    buf.push(b'\n');
-
-    // Ensure parent directory exists
-    if let Some(parent) = config.history_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // Atomic append: O_APPEND, mode 0o600
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .mode(0o600)
-        .open(&config.history_path)?;
-
-    file.write_all(&buf)?;
-
-    Ok(())
+    let cwd_ref = cwd.or(cwd_env.as_deref()).unwrap_or("?");
+    record_to_path(
+        cmd_parts,
+        exit_code,
+        duration_ms,
+        Some(cwd_ref),
+        config,
+        &config.history_path,
+    )
 }
 
 /// Record with explicit path override (for testing).

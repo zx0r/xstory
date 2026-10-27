@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
@@ -357,7 +357,9 @@ impl Arena {
                 byteview_raw(field_cwd, mmap_base)
             };
 
-            let bv_cmd = if has_escapes(field_cmd) {
+            let cmd_has_esc = has_escapes(field_cmd);
+            let cmd_unescape_start = arena.unescape_buf.len();
+            let bv_cmd = if cmd_has_esc {
                 let (offset, len) = unescape_into(field_cmd, &mut arena.unescape_buf);
                 let unescaped = &arena.unescape_buf[offset as usize..offset as usize + len];
                 byteview_unescaped(unescaped, offset)
@@ -365,10 +367,10 @@ impl Arena {
                 byteview_raw(field_cmd, mmap_base)
             };
 
-            let mask = char_mask(if has_escapes(field_cmd) {
-                // Resolve from unescape_buf for the just-unescaped command
-                let bv_len = bv_cmd.len as usize;
-                &arena.unescape_buf[arena.unescape_buf.len() - bv_len..]
+            let mask = char_mask(if cmd_has_esc {
+                // Resolve from unescape_buf; start recorded before the push, length from ByteView
+                debug_assert!(arena.unescape_buf.len() >= cmd_unescape_start + bv_cmd.len as usize);
+                &arena.unescape_buf[cmd_unescape_start..cmd_unescape_start + bv_cmd.len as usize]
             } else {
                 field_cmd
             });
@@ -394,8 +396,9 @@ impl Arena {
             return;
         }
 
-        let mut seen_hashes: HashSet<u64> = HashSet::with_capacity(n);
-        let mut hash_to_indices: Vec<(u64, u32)> = Vec::with_capacity(n);
+        // HashMap keyed by FNV-1a hash → Vec of indices with that hash.
+        // Collision resolution: O(k) per bucket where k = collision count (typically 1).
+        let mut seen: HashMap<u64, Vec<u32>> = HashMap::with_capacity(n);
         let mut global_buf: Vec<u32> = Vec::with_capacity(n);
         let mut local_buf: Vec<u32> = Vec::with_capacity(n / 4);
 
@@ -405,17 +408,13 @@ impl Arena {
             let cmd = self.cmd_bytes(idx);
             let h = fnv1a(cmd);
 
-            if seen_hashes.contains(&h) {
-                let is_dup = hash_to_indices.iter()
-                    .filter(|(stored_h, _)| *stored_h == h)
-                    .any(|(_, stored_idx)| self.cmd_bytes(*stored_idx) == cmd);
-                if is_dup {
-                    continue;
-                }
+            if let Some(indices) = seen.get(&h)
+                && indices.iter().any(|&si| self.cmd_bytes(si) == cmd)
+            {
+                continue;
             }
 
-            seen_hashes.insert(h);
-            hash_to_indices.push((h, idx));
+            seen.entry(h).or_default().push(idx);
             global_buf.push(idx);
 
             if let Some(lcwd) = local_cwd

@@ -343,37 +343,35 @@ fn restore_terminal(
 
 // ── Formatting Helpers ───────────────────────────────────────────
 
-#[allow(clippy::cast_possible_truncation, clippy::borrow_as_ptr)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #[must_use]
 pub fn format_timestamp(timestamp_ms: i64) -> String {
-    let secs = (timestamp_ms / 1000) as libc::time_t;
-    let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
-
-    #[cfg(unix)]
-    let success = unsafe {
-        !libc::localtime_r(&secs, tm.as_mut_ptr()).is_null()
-    };
-
-    #[cfg(windows)]
-    let success = unsafe {
-        libc::localtime_s(tm.as_mut_ptr(), &secs) == 0
-    };
-
-    if !success {
+    if timestamp_ms <= 0 {
         return "--:--".to_owned();
     }
+    let secs = timestamp_ms / 1000;
+    let day_sec = secs % 86400;
+    let hour = day_sec / 3600;
+    let min = (day_sec % 3600) / 60;
 
-    // SAFETY: The function succeeded and fully initialized tm.
-    let tm = unsafe { tm.assume_init() };
+    let days = secs / 86400;
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = (z - era * 146_097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
 
-    let month = match tm.tm_mon {
-        0 => "Jan", 1 => "Feb", 2 => "Mar", 3 => "Apr",
-        4 => "May", 5 => "Jun", 6 => "Jul", 7 => "Aug",
-        8 => "Sep", 9 => "Oct", 10 => "Nov", 11 => "Dec",
+    let month = match m {
+        1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr",
+        5 => "May", 6 => "Jun", 7 => "Jul", 8 => "Aug",
+        9 => "Sep", 10 => "Oct", 11 => "Nov", 12 => "Dec",
         _ => "???",
     };
 
-    format!("{:02} {} {:02}:{:02}", tm.tm_mday, month, tm.tm_hour, tm.tm_min)
+    format!("{d:02} {month} {hour:02}:{min:02}")
 }
 
 fn abbreviate_path(path: &str) -> String {
@@ -479,6 +477,40 @@ pub fn create_panel_block(focus: PanelFocus) -> Block<'static> {
         .padding(PANEL_PADDING)
 }
 
+impl MasterLayout {
+    #[must_use]
+    pub fn history_inner(self) -> Rect {
+        create_panel_block(PanelFocus::Unfocused).inner(self.history)
+    }
+
+    #[must_use]
+    pub fn preview_inner(self) -> Rect {
+        create_panel_block(PanelFocus::Unfocused).inner(self.preview)
+    }
+
+    #[must_use]
+    pub fn query_inner(self) -> Rect {
+        create_panel_block(PanelFocus::Unfocused).inner(self.query)
+    }
+}
+
+#[inline]
+const fn in_rect(col: u16, row: u16, rect: Rect) -> bool {
+    col >= rect.x
+        && col < rect.x.saturating_add(rect.width)
+        && row >= rect.y
+        && row < rect.y.saturating_add(rect.height)
+}
+
+fn bracketed<'a>(inner: impl Into<std::borrow::Cow<'a, str>>, style: Style) -> Vec<Span<'a>> {
+    let bracket_style = Style::default().fg(Color::Indexed(241));
+    vec![
+        Span::styled("[", bracket_style),
+        Span::styled(inner, style),
+        Span::styled("]", bracket_style),
+    ]
+}
+
 fn split_spans_into_lines(spans: Vec<Span<'_>>) -> Vec<Line<'_>> {
     let mut lines = Vec::new();
     let mut current_line_spans = Vec::new();
@@ -568,7 +600,7 @@ fn build_highlighted_spans<'a>(
         let query_term = extract_query_term(q);
         if !query_term.is_empty() {
             let query_chars: Vec<char> = query_term.chars().collect();
-            let mut match_indices = std::collections::HashSet::new();
+            let mut match_indices = Vec::with_capacity(query_chars.len());
             let mut q_idx = 0;
 
             for (t_idx, &(_, t_ch)) in char_offsets.iter().enumerate() {
@@ -577,7 +609,7 @@ fn build_highlighted_spans<'a>(
                     if t_ch.eq_ignore_ascii_case(&q_ch)
                         || t_ch.to_lowercase().eq(q_ch.to_lowercase())
                     {
-                        match_indices.insert(t_idx);
+                        match_indices.push(t_idx);
                         q_idx += 1;
                     }
                 }
@@ -631,6 +663,7 @@ pub fn render_frame(
     arena: &Arena,
     token_cache: &mut TokenCache,
     preview_cache: &mut PreviewCache,
+    layout: MasterLayout,
 ) {
     let area = f.area();
 
@@ -640,8 +673,6 @@ pub fn render_frame(
         f.render_widget(msg, area);
         return;
     }
-
-    let layout = compute_master_layout(area);
 
     // 1. Action Buttons
     let items = [
@@ -676,14 +707,10 @@ pub fn render_frame(
         Scope::Local => "L",
         Scope::Global => "G",
     };
-    let scope_spans = vec![
-        Span::styled("[", Style::default().fg(Color::Indexed(241))),
-        Span::styled(
-            scope_char,
-            Style::default().fg(Color::Indexed(103)).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("]", Style::default().fg(Color::Indexed(241))),
-    ];
+    let scope_spans = bracketed(
+        scope_char,
+        Style::default().fg(Color::Indexed(103)).add_modifier(Modifier::BOLD),
+    );
 
     let total = dash.result.indices.len();
     let current = if total == 0 {
@@ -692,11 +719,7 @@ pub fn render_frame(
         dash.selected.min(total.saturating_sub(1)) + 1
     };
     let count_str = format!("{}/{}", format_thousands(current), format_thousands(total));
-    let count_spans = vec![
-        Span::styled("[", Style::default().fg(Color::Indexed(241))),
-        Span::styled(count_str, Style::default().fg(Color::Indexed(241))),
-        Span::styled("]", Style::default().fg(Color::Indexed(241))),
-    ];
+    let count_spans = bracketed(count_str, Style::default().fg(Color::Indexed(241)));
 
     let history_block = create_panel_block(history_focus)
         .title_top(Line::from(scope_spans).alignment(Alignment::Left))
@@ -774,22 +797,9 @@ pub fn render_frame(
         ("--:--".to_owned(), String::new())
     };
 
-    let time_spans = vec![
-        Span::styled("[", Style::default().fg(Color::Indexed(241))),
-        Span::styled(
-            time_str,
-            Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC),
-        ),
-        Span::styled("]", Style::default().fg(Color::Indexed(241))),
-    ];
-    let path_spans = vec![
-        Span::styled("[", Style::default().fg(Color::Indexed(241))),
-        Span::styled(
-            path_str,
-            Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC),
-        ),
-        Span::styled("]", Style::default().fg(Color::Indexed(241))),
-    ];
+    let meta_style = Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC);
+    let time_spans = bracketed(time_str, meta_style);
+    let path_spans = bracketed(path_str, meta_style);
 
     let mut preview_block = create_panel_block(preview_focus)
         .title_top(Line::from(time_spans).alignment(Alignment::Left))
@@ -821,16 +831,10 @@ pub fn render_frame(
     let preview_scroll_u16 = (dash.preview_scroll as u16).min(max_scroll);
 
     if visual_rows > preview_inner.height as usize {
+        let scroll_str = format!("{}/{} • Alt+↓/↑ scroll", preview_scroll_u16 + 1, visual_rows);
+        let scroll_spans = bracketed(scroll_str, meta_style);
         preview_block = preview_block.title_bottom(
-            Line::from(vec![
-                Span::styled("[", Style::default().fg(Color::Indexed(241))),
-                Span::styled(
-                    format!("{}/{} • Alt+↓/↑ scroll", preview_scroll_u16 + 1, visual_rows),
-                    Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC),
-                ),
-                Span::styled("]", Style::default().fg(Color::Indexed(241))),
-            ])
-            .alignment(Alignment::Right),
+            Line::from(scroll_spans).alignment(Alignment::Right),
         );
     }
 
@@ -892,12 +896,11 @@ pub fn run_tui(
     let outcome = loop {
         if dash.dirty {
             let layout = compute_master_layout(Rect::new(0, 0, dash.width, dash.height));
-            let history_inner = create_panel_block(PanelFocus::Unfocused).inner(layout.history);
-            let visible_rows = history_inner.height as usize;
+            let visible_rows = layout.history_inner().height as usize;
             dash.update_viewport(visible_rows, config.scroll_off);
 
             terminal.draw(|f| {
-                render_frame(f, &dash, arena, &mut token_cache, &mut preview_cache);
+                render_frame(f, &dash, arena, &mut token_cache, &mut preview_cache, layout);
             })?;
             dash.dirty = false;
         }
@@ -1044,10 +1047,7 @@ pub fn run_tui(
             // --- Mouse scroll & click support ---
             Event::Mouse(mouse) => {
                 let layout = compute_master_layout(Rect::new(0, 0, dash.width, dash.height));
-                let is_over_preview = mouse.column >= layout.preview.x
-                    && mouse.column < layout.preview.x + layout.preview.width
-                    && mouse.row >= layout.preview.y
-                    && mouse.row < layout.preview.y + layout.preview.height;
+                let is_over_preview = in_rect(mouse.column, mouse.row, layout.preview);
 
                 match mouse.kind {
                     MouseEventKind::ScrollUp => {
@@ -1071,13 +1071,8 @@ pub fn run_tui(
                         dash.dirty = true;
                     }
                     MouseEventKind::Down(MouseButton::Left) => {
-                        let history_block = create_panel_block(PanelFocus::Unfocused);
-                        let history_inner = history_block.inner(layout.history);
-                        if mouse.column >= history_inner.x
-                            && mouse.column < history_inner.x + history_inner.width
-                            && mouse.row >= history_inner.y
-                            && mouse.row < history_inner.y + history_inner.height
-                        {
+                        let history_inner = layout.history_inner();
+                        if in_rect(mouse.column, mouse.row, history_inner) {
                             let row_offset = (mouse.row - history_inner.y) as usize;
                             let from_bottom = (history_inner.height as usize)
                                 .saturating_sub(1)
@@ -1092,17 +1087,9 @@ pub fn run_tui(
                         } else if is_over_preview {
                             dash.focus = FocusedPanel::Preview;
                             dash.dirty = true;
-                        } else {
-                            let query_block = create_panel_block(PanelFocus::Unfocused);
-                            let query_inner = query_block.inner(layout.query);
-                            if mouse.column >= query_inner.x
-                                && mouse.column < query_inner.x + query_inner.width
-                                && mouse.row >= query_inner.y
-                                && mouse.row < query_inner.y + query_inner.height
-                            {
-                                dash.focus = FocusedPanel::Query;
-                                dash.dirty = true;
-                            }
+                        } else if in_rect(mouse.column, mouse.row, layout.query_inner()) {
+                            dash.focus = FocusedPanel::Query;
+                            dash.dirty = true;
                         }
                     }
                     _ => {}
@@ -1312,10 +1299,11 @@ mod tests {
         let mut token_cache = TokenCache::new();
         let mut preview_cache = PreviewCache::new();
 
+        let layout = compute_master_layout(Rect::new(0, 0, 10, 3));
         let backend = ratatui::backend::TestBackend::new(10, 3);
         let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
         terminal.draw(|f| {
-            render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache);
+            render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache, layout);
         }).expect("draw");
     }
 
@@ -1470,17 +1458,17 @@ mod tests {
 
         let mut token_cache = TokenCache::new();
         let mut preview_cache = PreviewCache::new();
+        let layout = compute_master_layout(Rect::new(0, 0, 80, 24));
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
 
         terminal
             .draw(|f| {
-                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache);
+                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache, layout);
             })
             .expect("draw");
 
         let buffer = terminal.backend().buffer().clone();
-        let layout = compute_master_layout(Rect::new(0, 0, 80, 24));
         let history_block = create_panel_block(PanelFocus::Unfocused);
         let history_inner = history_block.inner(layout.history);
 
@@ -1507,7 +1495,7 @@ mod tests {
 
         terminal
             .draw(|f| {
-                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache);
+                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache, layout);
             })
             .expect("draw");
 

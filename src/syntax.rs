@@ -157,6 +157,7 @@ fn parse_bash(cmd: &str, spans: &mut Vec<Span>) {
         if let Some(tree) = parser.parse(cmd, None) {
             collect_spans(tree.root_node(), cmd.as_bytes(), spans);
         }
+        parser.reset();
     });
 }
 

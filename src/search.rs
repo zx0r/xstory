@@ -81,7 +81,12 @@ fn match_candidate(
 
     let q_bytes = query_str.as_bytes();
     let h_bytes = haystack_str.as_bytes();
-    if h_bytes.len() >= q_bytes.len() && h_bytes[..q_bytes.len()].eq_ignore_ascii_case(q_bytes) {
+    // Fast-path: exact prefix bonus — only valid for Prefix and Fuzzy modes.
+    // Substring/Suffix modes must not inflate scores for prefix-coincidence matches.
+    if matches!(mode, QueryMode::Prefix(_) | QueryMode::Fuzzy(_))
+        && h_bytes.len() >= q_bytes.len()
+        && h_bytes[..q_bytes.len()].eq_ignore_ascii_case(q_bytes)
+    {
         return Some(20_000u32.saturating_sub(haystack_str.len().min(10_000) as u32));
     }
 

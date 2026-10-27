@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::path::Path;
+use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use xstory::arena::{Arena, Scope};
 use xstory::search::search;
@@ -57,7 +58,7 @@ fn bench_arena_load(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("load_100k", BENCH_ENTRY_COUNT), |b| {
         b.iter(|| {
             let arena = Arena::load(&path, None).expect("load");
-            criterion::black_box(arena);
+            black_box(arena);
         });
     });
     group.finish();
@@ -74,42 +75,42 @@ fn bench_search_pipeline(c: &mut Criterion) {
     group.bench_function("empty_query", |b| {
         b.iter(|| {
             let res = search(&arena, "", Scope::Global);
-            criterion::black_box(res);
+            black_box(res);
         });
     });
 
     group.bench_function("prefix_git", |b| {
         b.iter(|| {
             let res = search(&arena, "^git", Scope::Global);
-            criterion::black_box(res);
+            black_box(res);
         });
     });
 
     group.bench_function("substring_release", |b| {
         b.iter(|| {
             let res = search(&arena, "'release", Scope::Global);
-            criterion::black_box(res);
+            black_box(res);
         });
     });
 
     group.bench_function("suffix_latest", |b| {
         b.iter(|| {
             let res = search(&arena, "latest$", Scope::Global);
-            criterion::black_box(res);
+            black_box(res);
         });
     });
 
     group.bench_function("fuzzy_crbld", |b| {
         b.iter(|| {
             let res = search(&arena, "crbld", Scope::Global);
-            criterion::black_box(res);
+            black_box(res);
         });
     });
 
     group.bench_function("local_scope_prefix", |b| {
         b.iter(|| {
             let res = search(&arena, "^git", Scope::Local);
-            criterion::black_box(res);
+            black_box(res);
         });
     });
 
