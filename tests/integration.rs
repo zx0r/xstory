@@ -154,7 +154,7 @@ fn e2e_cli_dispatch_and_exit_codes() {
     cmd.arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("USAGE:"));
+        .stdout(predicate::str::contains("Usage:"));
 
     // Init hooks
     let mut cmd = Command::cargo_bin("xstory").expect("binary");

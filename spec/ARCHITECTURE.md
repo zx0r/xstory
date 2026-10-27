@@ -709,14 +709,15 @@ unwrap_used = "warn"
 ## 7. CLI Interface (Hand-Rolled)
 
 ```
-xstory record <command...> --exit=<i32> --duration=<u64> [--cwd=<path>]
+xstory record [<command...>] [--stdin] --exit=<i32> --duration=<u64> [--cwd=<path>]
 xstory search [--query=<str>]
 xstory init <bash|zsh|fish>
 xstory --help
 xstory --version
 ```
 
-Parser: ~40 lines of `std::env::args()` + manual matching. No clap, no structopt.
+Parser: ~40 lines of `std::env::args()` + manual matching. No clap, no structopt.  
+*Detailed shell integration specification:* see [SHELL_INTEGRATION.md](file:///Users/x0r/x/dev/own/xstory_ref/spec/SHELL_INTEGRATION.md).
 
 ---
 
@@ -724,6 +725,8 @@ Parser: ~40 lines of `std::env::args()` + manual matching. No clap, no structopt
 
 - [ ] `stdout` is NEVER written to during TUI — all rendering goes to `stderr`
 - [ ] `O_APPEND` used for all history writes — no file locks
+- [ ] `record --stdin` streaming eliminates process table leaks (`ps aux` / `cmdline`) and `E2BIG` limits
+- [ ] Zero external processes (`date`, `python`) in shell hook hot paths (sub-millisecond prompt latency)
 - [ ] `Arena::resolve_bv(&ByteView)` borrows from `self.commands`/`self.cwds` Vec — no dangling stack refs
 - [ ] `Arena::load()` returns empty Arena for missing/empty file — no `MmapEmpty` error
 - [ ] Deduplication happens once in `Arena::load()`, not per-keystroke in search
@@ -735,6 +738,7 @@ Parser: ~40 lines of `std::env::args()` + manual matching. No clap, no structopt
 - [ ] No types with suffix Manager/Service/Handler/Coordinator/Context
 - [ ] All explicit lifetimes confined to `Arena::resolve_bv` return values
 - [ ] `crossterm` has no `event-stream` feature (synchronous `event::read()` only)
-- [ ] Shell hooks: `bash`, `zsh`, `fish` — all three supported
+- [ ] Shell hooks: `bash`, `zsh`, `fish` — all three supported with zero-fork and TIOCSTI immunity
+- [ ] Two-step Readline macro dispatch in Bash eliminates `TIOCSTI` dependency (Linux 6.2+ immune)
 - [ ] Config: env vars → `~/.config/xstory/config` (key=value) → compiled-in defaults
 - [ ] `cargo clippy --all-targets -- -D warnings` passes with pedantic+nursery
