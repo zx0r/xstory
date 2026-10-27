@@ -1,16 +1,11 @@
-//! Search pipeline: bitmask prune → nucleo fuzzy → Top-K heap.
+//! Search pipeline: bitmask prune → nucleo fuzzy → score ranking.
 //! Borrows Arena immutably. Returns owned `SearchResult`.
-
-use std::collections::BinaryHeap;
 
 use nucleo_matcher::{Matcher, Utf32Str};
 
 use crate::arena::{char_mask, Arena, Scored, Scope};
 
 // ── Constants ────────────────────────────────────────────────────
-
-/// Maximum results returned from search.
-const TOP_K: usize = 1000;
 
 /// Chunk size for parallel search. Below this, single-thread.
 const PAR_THRESHOLD: usize = 500;
@@ -102,32 +97,6 @@ fn match_candidate(
     score.map(u32::from)
 }
 
-// ── Top-K Heap ───────────────────────────────────────────────────
-
-/// Push a scored candidate into a bounded heap.
-/// If heap is full and new score ≤ min score, reject O(1).
-fn heap_push(heap: &mut BinaryHeap<Scored>, scored: Scored, k: usize) {
-    if heap.len() < k {
-        heap.push(scored);
-    } else if let Some(min) = heap.peek() {
-        // Scored has reverse Ord: peek() returns the minimum score
-        if scored.score > min.score {
-            // Replace the minimum with our better candidate
-            // pop() removes the min (due to reverse Ord), then push new
-            let _ = heap.pop();
-            heap.push(scored);
-        }
-    }
-}
-
-/// Drain heap into a sorted Vec (score descending).
-fn heap_to_sorted(heap: BinaryHeap<Scored>) -> Vec<u32> {
-    let mut items: Vec<Scored> = heap.into_vec();
-    // Sort by score descending (natural order, since Scored has reverse Ord for heap)
-    items.sort_unstable_by(|a, b| b.score.cmp(&a.score).then_with(|| a.idx.cmp(&b.idx)));
-    items.iter().map(|s| s.idx).collect()
-}
-
 // ── Search Chunk Engine ──────────────────────────────────────────
 
 fn search_chunk(
@@ -135,21 +104,21 @@ fn search_chunk(
     indices: &[u32],
     mode: QueryMode<'_>,
     query_mask: u64,
-) -> BinaryHeap<Scored> {
+) -> Vec<Scored> {
     let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
     let mut needle_buf = Vec::new();
     let mut haystack_buf = Vec::new();
-    let mut heap = BinaryHeap::with_capacity(TOP_K + 1);
+    let mut scored = Vec::new();
 
     for &idx in indices {
         if query_mask == 0 || (arena.masks[idx as usize] & query_mask) == query_mask {
             let cmd = arena.cmd_str(idx);
             if let Some(score) = match_candidate(&mut matcher, mode, cmd, &mut needle_buf, &mut haystack_buf) {
-                heap_push(&mut heap, Scored { score, idx }, TOP_K);
+                scored.push(Scored { score, idx });
             }
         }
     }
-    heap
+    scored
 }
 
 // ── Search Execution (Sequential / Parallel) ─────────────────────
@@ -161,10 +130,13 @@ fn search_sequential(
     mode: QueryMode<'_>,
     query_mask: u64,
 ) -> SearchResult {
-    let heap = search_chunk(arena, indices, mode, query_mask);
+    let mut items = search_chunk(arena, indices, mode, query_mask);
+    items.sort_unstable_by(|a, b| b.score.cmp(&a.score).then_with(|| a.idx.cmp(&b.idx)));
+    let total = items.len() as u32;
+    let result_indices = items.into_iter().map(|s| s.idx).collect();
     SearchResult {
-        indices: heap_to_sorted(heap),
-        total: indices.len() as u32,
+        indices: result_indices,
+        total,
     }
 }
 
@@ -177,27 +149,29 @@ fn search_parallel(
 ) -> SearchResult {
     use rayon::prelude::*;
 
-    let local_heaps: Vec<BinaryHeap<Scored>> = indices
+    let local_results: Vec<Vec<Scored>> = indices
         .par_chunks(CHUNK_SIZE)
         .map(|chunk| search_chunk(arena, chunk, mode, query_mask))
         .collect();
 
-    let mut final_heap = BinaryHeap::with_capacity(TOP_K + 1);
-    for local in local_heaps {
-        for item in local {
-            heap_push(&mut final_heap, item, TOP_K);
-        }
+    let total_matches: usize = local_results.iter().map(Vec::len).sum();
+    let mut all_items = Vec::with_capacity(total_matches);
+    for chunk in local_results {
+        all_items.extend(chunk);
     }
 
+    all_items.sort_unstable_by(|a, b| b.score.cmp(&a.score).then_with(|| a.idx.cmp(&b.idx)));
+    let total = all_items.len() as u32;
+    let result_indices = all_items.into_iter().map(|s| s.idx).collect();
     SearchResult {
-        indices: heap_to_sorted(final_heap),
-        total: indices.len() as u32,
+        indices: result_indices,
+        total,
     }
 }
 
 // ── Public API ───────────────────────────────────────────────────
 
-/// Execute search pipeline: bitmask prune → nucleo fuzzy → Top-K heap.
+/// Execute search pipeline: bitmask prune → nucleo fuzzy → sorted matches.
 /// Borrows Arena immutably. Returns owned `SearchResult` (`Vec<u32>` of indices).
 #[must_use]
 #[allow(clippy::cast_possible_truncation)]
@@ -207,8 +181,7 @@ pub fn search(arena: &Arena, query: &str, scope: Scope) -> SearchResult {
     let mode = parse_query(query);
 
     if matches!(mode, QueryMode::Empty) {
-        let n = indices.len().min(TOP_K);
-        return SearchResult { indices: indices[..n].to_vec(), total: indices.len() as u32 };
+        return SearchResult { indices: indices.to_vec(), total: indices.len() as u32 };
     }
 
     let query_bytes = match mode {
@@ -335,10 +308,9 @@ mod tests {
     }
 
     #[test]
-    fn top_k_bounded() {
-        // Create more than TOP_K entries
+    fn search_unbounded_real_matches() {
         let mut lines = Vec::new();
-        let owned: Vec<String> = (0..1500)
+        let owned: Vec<String> = (0..2500)
             .map(|i| format!("{}\t50\t0\t/home\tcmd_{i:04}", 1000 + i))
             .collect();
         for line in &owned {
@@ -346,7 +318,12 @@ mod tests {
         }
         let (_dir, arena) = make_arena(&lines);
         let result = search(&arena, "cmd", Scope::Global);
-        assert!(result.indices.len() <= TOP_K);
+        assert_eq!(result.indices.len(), 2500);
+        assert_eq!(result.total, 2500);
+
+        let empty_res = search(&arena, "", Scope::Global);
+        assert_eq!(empty_res.indices.len(), 2500);
+        assert_eq!(empty_res.total, 2500);
     }
 
     #[test]

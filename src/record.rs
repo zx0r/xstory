@@ -434,7 +434,16 @@ fn load_existing_hashes(target_path: &Path, unesc: &mut Vec<u8>) -> HashSet<u64>
 fn open_input_stream(in_path: Option<&str>) -> Result<InStream, crate::error::Error> {
     match in_path {
         Some("-") => Ok(InStream::Stdin(BufReader::with_capacity(64 * 1024, std::io::stdin()))),
-        Some(p) => Ok(InStream::File(BufReader::with_capacity(64 * 1024, std::fs::File::open(p)?))),
+        Some(p) => {
+            let path = if p == "~" {
+                std::env::var_os("HOME").map_or_else(|| PathBuf::from(p), PathBuf::from)
+            } else if let Some(stripped) = p.strip_prefix("~/") {
+                std::env::var_os("HOME").map_or_else(|| PathBuf::from(p), |h| PathBuf::from(h).join(stripped))
+            } else {
+                PathBuf::from(p)
+            };
+            Ok(InStream::File(BufReader::with_capacity(64 * 1024, std::fs::File::open(path)?)))
+        }
         None => {
             let p = detect_shell_history()
                 .ok_or(crate::error::Error::InvalidArgs("could not auto-detect shell history file"))?;
@@ -459,6 +468,7 @@ fn open_target_append(target_path: &Path) -> std::io::Result<BufWriter<std::fs::
 ///
 /// # Errors
 /// Returns `Error::Io` or `Error::InvalidArgs` on failure.
+#[allow(clippy::too_many_lines)]
 pub fn import_history_to_path(
     in_path: Option<&str>,
     config: &Config,
@@ -478,9 +488,14 @@ pub fn import_history_to_path(
         count: 0,
     };
 
+    let fallback_cwd = std::env::var("PWD")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())
+        .unwrap_or_else(|| "/".to_owned());
     let mut multi_buf = Vec::new();
     let mut pending_ts: i64 = 0;
     let mut pending_fish: Option<String> = None;
+    let mut pending_cwd: Option<String> = None;
 
     loop {
         raw_line.clear();
@@ -495,11 +510,12 @@ pub fn import_history_to_path(
 
         unmetafy_in_place(&mut raw_line);
 
-        // 1. Fish YAML format (`- cmd: ...` / `  when: ...`)
+        // 1. Fish YAML format (`- cmd: ...` / `  when: ...` / `  paths:`)
         if multi_buf.is_empty() {
             if let Some(cmd_raw) = raw_line.strip_prefix(b"- cmd: ") {
                 if let Some(prev) = pending_fish.take() {
-                    ctx.push(pending_ts, 0, 0, "?", &prev)?;
+                    let cwd = pending_cwd.take().unwrap_or_else(|| fallback_cwd.clone());
+                    ctx.push(pending_ts, 0, 0, &cwd, &prev)?;
                     pending_ts = 0;
                 }
                 unescape_into(cmd_raw, &mut unesc);
@@ -511,7 +527,15 @@ pub fn import_history_to_path(
                         .and_then(|s| s.trim().parse::<i64>().ok())
                         .unwrap_or(0) * 1000;
                     continue;
-                } else if raw_line.starts_with(b"  paths:") || raw_line.starts_with(b"    - ") {
+                } else if let Some(p) = raw_line.strip_prefix(b"    - ") {
+                    if let Ok(p_str) = std::str::from_utf8(p) {
+                        let trimmed = p_str.trim();
+                        if trimmed.starts_with('/') || trimmed.starts_with('~') {
+                            pending_cwd = Some(trimmed.to_owned());
+                        }
+                    }
+                    continue;
+                } else if raw_line.starts_with(b"  paths:") {
                     continue;
                 }
             }
@@ -559,18 +583,19 @@ pub fn import_history_to_path(
             let mut h = header.splitn(2, |&b| b == b':');
             let ts = h.next().and_then(|s| std::str::from_utf8(s).ok()?.parse::<i64>().ok()).unwrap_or(0) * 1000;
             let dur = h.next().and_then(|s| std::str::from_utf8(s).ok()?.parse::<u64>().ok()).unwrap_or(0) * 1000;
-            ctx.push(ts, dur, 0, "?", &String::from_utf8_lossy(cmd))?;
+            ctx.push(ts, dur, 0, &fallback_cwd, &String::from_utf8_lossy(cmd))?;
             multi_buf.clear();
             continue;
         }
 
-        ctx.push(pending_ts, 0, 0, "?", &String::from_utf8_lossy(full))?;
+        ctx.push(pending_ts, 0, 0, &fallback_cwd, &String::from_utf8_lossy(full))?;
         pending_ts = 0;
         multi_buf.clear();
     }
 
     if let Some(prev) = pending_fish.take() {
-        ctx.push(pending_ts, 0, 0, "?", &prev)?;
+        let cwd = pending_cwd.take().unwrap_or(fallback_cwd);
+        ctx.push(pending_ts, 0, 0, &cwd, &prev)?;
     }
 
     ctx.writer.flush()?;
@@ -588,6 +613,7 @@ mod tests {
         Config {
             history_path: path,
             scroll_off: 4,
+            preview_mode: crate::arena::PreviewMode::Dynamic,
             exclude_commands: vec!["exit".into(), "logout".into(), "clear".into()],
             secret_patterns: vec!["AWS_SECRET".into(), "GITHUB_TOKEN".into(), "--password".into()],
         }
@@ -845,6 +871,7 @@ mod tests {
         let arena = crate::arena::Arena::load(&hist, None).expect("load");
         assert_eq!(arena.len(), 2);
         assert_eq!(arena.cmd_str(0), "echo \"hello\nworld\"");
+        assert_eq!(arena.cwd_str(0), "/tmp");
         assert_eq!(arena.timestamps[0], 1_700_000_000_000);
         assert_eq!(arena.cmd_str(1), "cargo test");
     }

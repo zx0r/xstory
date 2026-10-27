@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::arena::{Arena, Config, Scope, Theme};
+use crate::arena::{Arena, Config, PreviewMode, Scope, Theme};
 use crate::error::Error;
 use crate::search::{self, SearchResult};
 use crate::syntax::{self, PreviewCache, TokenCache};
@@ -51,6 +51,7 @@ pub struct Dashboard {
     pub selected:        usize,
     pub viewport_offset: usize,
     pub preview_scroll:  usize,
+    pub preview_mode:    PreviewMode,
 
     // --- display ---
     pub theme:           Theme,
@@ -85,6 +86,7 @@ impl Dashboard {
             selected: 0,
             viewport_offset: 0,
             preview_scroll: 0,
+            preview_mode: PreviewMode::default(),
             theme,
             width,
             height,
@@ -210,6 +212,25 @@ impl Dashboard {
         let &idx = self.result.indices.get(self.selected)?;
         Some(arena.cmd_str(idx).to_owned())
     }
+
+    /// Calculate current preview height taking preview mode and selection into account.
+    #[must_use]
+    pub fn preview_height(&self, arena: &Arena, area_height: u16, area_width: u16) -> u16 {
+        match self.preview_mode {
+            PreviewMode::Fixed => {
+                if area_height >= 14 {
+                    PREVIEW_PANEL_HEIGHT
+                } else {
+                    PREVIEW_PANEL_HEIGHT.min(area_height.saturating_sub(8))
+                }
+            }
+            PreviewMode::Dynamic => {
+                let max_preview_h = (area_height / 2).clamp(6, 20).min(area_height.saturating_sub(8));
+                let cmd = self.selected_command(arena);
+                calc_preview_height(cmd.as_deref(), area_width, max_preview_h)
+            }
+        }
+    }
 }
 
 // ── Theme Detection ──────────────────────────────────────────────
@@ -328,7 +349,6 @@ pub const PREVIEW_PANEL_HEIGHT: u16 = 6;
 pub const QUERY_BAR_HEIGHT: u16 = 3;
 pub const HORIZONTAL_MARGIN: u16 = 1;
 pub const PANEL_PADDING_HORIZONTAL: u16 = 1;
-pub const PANEL_PADDING: Padding = Padding::horizontal(PANEL_PADDING_HORIZONTAL);
 
 /// Master layout chunks derived from a single vertical split hierarchy.
 #[derive(Debug, Clone, Copy)]
@@ -340,13 +360,36 @@ pub struct MasterLayout {
     pub query:   Rect,
 }
 
-/// Compute master layout tree with strict static heights to guarantee zero jitter.
+/// Compute dynamic preview height based on command line count and terminal width (OTS-1 standard).
 #[must_use]
-pub fn compute_master_layout(area: Rect) -> MasterLayout {
-    let p_h = if area.height >= 14 {
-        PREVIEW_PANEL_HEIGHT
+pub fn calc_preview_height(command: Option<&str>, width: u16, max_height: u16) -> u16 {
+    if max_height <= 2 {
+        return max_height;
+    }
+    match command {
+        Some(cmd) if !cmd.trim().is_empty() => {
+            let inner_width = width.saturating_sub(6).max(1);
+            let mut total_lines: u16 = 0;
+            for line in cmd.lines() {
+                #[allow(clippy::cast_possible_truncation)]
+                let char_count = line.chars().count() as u16;
+                let wrapped = char_count.max(1).div_ceil(inner_width);
+                total_lines = total_lines.saturating_add(wrapped);
+            }
+            let max_content = max_height.saturating_sub(2);
+            total_lines.clamp(1, max_content) + 2
+        }
+        _ => 3.min(max_height),
+    }
+}
+
+/// Compute master layout tree given preview panel height.
+#[must_use]
+pub fn compute_master_layout(area: Rect, preview_height: u16) -> MasterLayout {
+    let eff_preview_height = if preview_height <= 1 {
+        0
     } else {
-        PREVIEW_PANEL_HEIGHT.min(area.height.saturating_sub(8))
+        preview_height
     };
 
     let chunks = Layout::default()
@@ -356,7 +399,7 @@ pub fn compute_master_layout(area: Rect) -> MasterLayout {
             Constraint::Length(TOP_BREATHING_ROOM),
             Constraint::Length(ACTION_BAR_HEIGHT),
             Constraint::Min(3),
-            Constraint::Length(p_h),
+            Constraint::Length(eff_preview_height),
             Constraint::Length(QUERY_BAR_HEIGHT),
         ])
         .split(area);
@@ -377,24 +420,30 @@ pub enum PanelFocus {
     Unfocused,
 }
 
-/// Create a unified panel block with standard borders, rounded corners, and unified padding.
+/// Get border color for a panel based on its focus state.
 #[must_use]
-pub fn create_panel_block(focus: PanelFocus) -> Block<'static> {
-    let fg = match focus {
+pub const fn panel_border_color(focus: PanelFocus) -> Color {
+    match focus {
         PanelFocus::Focused => Color::Indexed(109),
         PanelFocus::Unfocused => Color::Indexed(241),
-    };
+    }
+}
+
+/// Create a unified panel block with standard borders, rounded corners, and zero padding.
+#[must_use]
+pub fn create_panel_block(focus: PanelFocus) -> Block<'static> {
+    let fg = panel_border_color(focus);
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(fg))
-        .padding(PANEL_PADDING)
+        .padding(Padding::ZERO)
 }
 
 impl MasterLayout {
-    #[must_use] pub fn history_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).inner(self.history) }
-    #[must_use] pub fn preview_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).inner(self.preview) }
-    #[must_use] pub fn query_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).inner(self.query) }
+    #[must_use] pub fn history_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).padding(Padding::new(0, 1, 0, 0)).inner(self.history) }
+    #[must_use] pub fn preview_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).padding(Padding::horizontal(1)).inner(self.preview) }
+    #[must_use] pub fn query_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).padding(Padding::horizontal(1)).inner(self.query) }
 }
 
 #[inline]
@@ -402,9 +451,10 @@ const fn in_rect(col: u16, row: u16, rect: Rect) -> bool {
     col >= rect.x && col < rect.x.saturating_add(rect.width) && row >= rect.y && row < rect.y.saturating_add(rect.height)
 }
 
-fn bracketed<'a>(inner: impl Into<std::borrow::Cow<'a, str>>, style: Style) -> Vec<Span<'a>> {
-    let b = Style::default().fg(Color::Indexed(241));
-    vec![Span::styled("[", b), Span::styled(inner, style), Span::styled("]", b)]
+fn bracketed<'a>(inner: impl Into<std::borrow::Cow<'a, str>>, border_color: Color) -> Vec<Span<'a>> {
+    let b = Style::default().fg(border_color);
+    let val = Style::default().fg(Color::Indexed(243));
+    vec![Span::styled("[", b), Span::styled(inner, val), Span::styled("]", b)]
 }
 
 fn split_spans_into_lines(spans: Vec<Span<'_>>) -> Vec<Line<'_>> {
@@ -530,9 +580,11 @@ pub fn render_frame(
     let current = if total == 0 { 0 } else { dash.selected.min(total.saturating_sub(1)) + 1 };
     let count_str = format!("{}/{}", format_thousands(current), format_thousands(total));
 
+    let h_border = panel_border_color(history_focus);
     let history_block = create_panel_block(history_focus)
-        .title_top(Line::from(bracketed(scope_char, Style::default().fg(Color::Indexed(103)).add_modifier(Modifier::BOLD))).alignment(Alignment::Left))
-        .title_top(Line::from(bracketed(count_str, Style::default().fg(Color::Indexed(241)))).alignment(Alignment::Right));
+        .padding(Padding::new(0, 1, 0, 0))
+        .title_top(Line::from(bracketed(scope_char, h_border)).alignment(Alignment::Left))
+        .title_top(Line::from(bracketed(count_str, h_border)).alignment(Alignment::Right));
 
     let h_inner = history_block.inner(layout.history);
     let (h_h, h_w) = (h_inner.height as usize, h_inner.width as usize);
@@ -564,10 +616,11 @@ pub fn render_frame(
         || ("--:--".to_owned(), String::new()),
         |&idx| (format_timestamp(arena.timestamps[idx as usize]), abbreviate_path(arena.cwd_str(idx))),
     );
-    let meta_style = Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC);
+    let p_border = panel_border_color(preview_focus);
     let mut preview_block = create_panel_block(preview_focus)
-        .title_top(Line::from(bracketed(time_str, meta_style)).alignment(Alignment::Left))
-        .title_top(Line::from(bracketed(path_str, meta_style)).alignment(Alignment::Right));
+        .padding(Padding::horizontal(1))
+        .title_top(Line::from(bracketed(time_str, p_border)).alignment(Alignment::Left))
+        .title_top(Line::from(bracketed(path_str, p_border)).alignment(Alignment::Right));
 
     let preview_lines = dash.result.indices.get(dash.selected).map_or_else(Vec::new, |&idx| {
         let cmd = arena.cmd_str(idx);
@@ -587,26 +640,24 @@ pub fn render_frame(
     let p_scroll = (dash.preview_scroll as u16).min(max_scroll);
 
     if visual_rows > p_inner.height as usize {
-        let scroll_str = format!("{}/{} • Alt+↓/↑ scroll", p_scroll + 1, visual_rows);
-        preview_block = preview_block.title_bottom(Line::from(bracketed(scroll_str, meta_style)).alignment(Alignment::Right));
+        let scroll_str = format!("{}/{} • Shift+↓/↑", p_scroll + 1, visual_rows);
+        preview_block = preview_block.title_bottom(Line::from(bracketed(scroll_str, p_border)).alignment(Alignment::Right));
     }
     f.render_widget(Paragraph::new(preview_lines).block(preview_block).wrap(Wrap { trim: false }).scroll((p_scroll, 0)), layout.preview);
 
     // 4. Search Query Box
     let query_focus = if dash.focus == FocusedPanel::Query { PanelFocus::Focused } else { PanelFocus::Unfocused };
-    let query_block = create_panel_block(query_focus);
+    let query_block = create_panel_block(query_focus).padding(Padding::horizontal(1));
     let q_inner = query_block.inner(layout.query);
-    let prompt_icon = " ";
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(prompt_icon, Style::default().fg(Color::Indexed(241))),
-            Span::raw(&dash.query),
-        ])).block(query_block),
-        layout.query,
-    );
+    let line = if dash.query.is_empty() {
+        Line::from(vec![Span::styled("", Style::default().fg(Color::Indexed(241)))])
+    } else {
+        Line::from(vec![Span::raw(&dash.query)])
+    };
+    f.render_widget(Paragraph::new(line).block(query_block), layout.query);
 
     #[allow(clippy::cast_possible_truncation)]
-    let cursor_x = (q_inner.x + prompt_icon.chars().count() as u16 + dash.cursor as u16)
+    let cursor_x = (q_inner.x + dash.cursor as u16)
         .min(q_inner.x + q_inner.width.saturating_sub(1));
     f.set_cursor_position((cursor_x, q_inner.y));
 }
@@ -627,6 +678,7 @@ pub fn run_tui(
     let theme = detect_theme();
     let (w, h) = crossterm::terminal::size()?;
     let mut dash = Dashboard::new(theme, w, h, initial_query, arena);
+    dash.preview_mode = config.preview_mode;
 
     let mut token_cache = TokenCache::new();
     let mut preview_cache = PreviewCache::new();
@@ -634,7 +686,8 @@ pub fn run_tui(
 
     let outcome = loop {
         if dash.dirty {
-            let layout = compute_master_layout(Rect::new(0, 0, dash.width, dash.height));
+            let p_h = dash.preview_height(arena, dash.height, dash.width);
+            let layout = compute_master_layout(Rect::new(0, 0, dash.width, dash.height), p_h);
             let visible_rows = layout.history_inner().height as usize;
             dash.update_viewport(visible_rows, config.scroll_off);
 
@@ -663,8 +716,16 @@ pub fn run_tui(
                 (KeyModifiers::CONTROL, KeyCode::Char('n')) | (KeyModifiers::NONE, KeyCode::Down) => { dash.focus = FocusedPanel::History; dash.move_selection(-1); dash.dirty = true; }
                 (KeyModifiers::NONE, KeyCode::PageUp) => { dash.focus = FocusedPanel::History; dash.move_selection(10); dash.dirty = true; }
                 (KeyModifiers::NONE, KeyCode::PageDown) => { dash.focus = FocusedPanel::History; dash.move_selection(-10); dash.dirty = true; }
-                (KeyModifiers::ALT, KeyCode::Up | KeyCode::Char('k')) => { dash.focus = FocusedPanel::Preview; dash.scroll_preview(-1, 1000); dash.dirty = true; }
-                (KeyModifiers::ALT, KeyCode::Down | KeyCode::Char('j')) => { dash.focus = FocusedPanel::Preview; dash.scroll_preview(1, 1000); dash.dirty = true; }
+                (KeyModifiers::SHIFT, KeyCode::Up) => {
+                    dash.focus = FocusedPanel::Preview;
+                    dash.scroll_preview(-1, 1000);
+                    dash.dirty = true;
+                }
+                (KeyModifiers::SHIFT, KeyCode::Down) => {
+                    dash.focus = FocusedPanel::Preview;
+                    dash.scroll_preview(1, 1000);
+                    dash.dirty = true;
+                }
                 (KeyModifiers::CONTROL, KeyCode::Char('c' | 'd' | 'g')) | (KeyModifiers::NONE, KeyCode::Esc) => break Outcome::Cancel,
                 (KeyModifiers::NONE, KeyCode::Enter) => {
                     let cmd = dash.selected_command(arena).or_else(|| {
@@ -681,7 +742,8 @@ pub fn run_tui(
             },
 
             Event::Mouse(mouse) => {
-                let layout = compute_master_layout(Rect::new(0, 0, dash.width, dash.height));
+                let p_h = dash.preview_height(arena, dash.height, dash.width);
+                let layout = compute_master_layout(Rect::new(0, 0, dash.width, dash.height), p_h);
                 let is_over_preview = in_rect(mouse.column, mouse.row, layout.preview);
 
                 match mouse.kind {
@@ -902,7 +964,7 @@ mod tests {
         let mut token_cache = TokenCache::new();
         let mut preview_cache = PreviewCache::new();
 
-        let layout = compute_master_layout(Rect::new(0, 0, 10, 3));
+        let layout = compute_master_layout(Rect::new(0, 0, 10, 3), 3);
         let backend = ratatui::backend::TestBackend::new(10, 3);
         let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
         terminal.draw(|f| {
@@ -933,7 +995,7 @@ mod tests {
         // Master layout must produce completely deterministic, static heights
         // to prevent any layout jitter during navigation.
         let area_normal = Rect::new(0, 0, 100, 30);
-        let layout_normal = compute_master_layout(area_normal);
+        let layout_normal = compute_master_layout(area_normal, PREVIEW_PANEL_HEIGHT);
 
         assert_eq!(layout_normal.ceiling.height, TOP_BREATHING_ROOM);
         assert_eq!(layout_normal.actions.height, ACTION_BAR_HEIGHT);
@@ -947,7 +1009,7 @@ mod tests {
 
         // Terminal resize to larger window preserves static preview and query heights
         let area_tall = Rect::new(0, 0, 100, 60);
-        let layout_tall = compute_master_layout(area_tall);
+        let layout_tall = compute_master_layout(area_tall, PREVIEW_PANEL_HEIGHT);
         assert_eq!(layout_tall.preview.height, PREVIEW_PANEL_HEIGHT);
         assert_eq!(layout_tall.query.height, QUERY_BAR_HEIGHT);
 
@@ -966,14 +1028,11 @@ mod tests {
         let inner_focused = focused_block.inner(area);
         let inner_unfocused = unfocused_block.inner(area);
 
-        // Both blocks must share identical box model and inner padding
+        // Both blocks must share identical box model with zero padding (indicator flush against border)
         assert_eq!(inner_focused, inner_unfocused);
-        assert_eq!(inner_focused.x, area.x + 1 + PANEL_PADDING_HORIZONTAL);
+        assert_eq!(inner_focused.x, area.x + 1);
         assert_eq!(inner_focused.y, area.y + 1);
-        assert_eq!(
-            inner_focused.width,
-            area.width - 2 - (2 * PANEL_PADDING_HORIZONTAL)
-        );
+        assert_eq!(inner_focused.width, area.width - 2);
         assert_eq!(inner_focused.height, area.height - 2);
     }
 
@@ -1061,7 +1120,7 @@ mod tests {
 
         let mut token_cache = TokenCache::new();
         let mut preview_cache = PreviewCache::new();
-        let layout = compute_master_layout(Rect::new(0, 0, 80, 24));
+        let layout = compute_master_layout(Rect::new(0, 0, 80, 24), PREVIEW_PANEL_HEIGHT);
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
 
@@ -1072,8 +1131,7 @@ mod tests {
             .expect("draw");
 
         let buffer = terminal.backend().buffer().clone();
-        let history_block = create_panel_block(PanelFocus::Unfocused);
-        let history_inner = history_block.inner(layout.history);
+        let history_inner = layout.history_inner();
 
         // The bottom line of the history inner area
         let bottom_y = history_inner.y + history_inner.height - 1;
@@ -1115,5 +1173,121 @@ mod tests {
             row_above_bottom.contains("older_cmd"),
             "Row above bottom must contain older command: got {row_above_bottom:?}"
         );
+    }
+
+    #[test]
+    fn calc_preview_height_behavior() {
+        // Empty or None defaults to 3 (or clamped to max_height)
+        assert_eq!(calc_preview_height(None, 80, 10), 3);
+        assert_eq!(calc_preview_height(Some(""), 80, 10), 3);
+        assert_eq!(calc_preview_height(Some("   "), 80, 10), 3);
+
+        // Single line command: 1 content + 2 borders = 3
+        assert_eq!(calc_preview_height(Some("echo hello"), 80, 10), 3);
+
+        // 3 line command: 3 content + 2 borders = 5
+        let multi = "echo 1\necho 2\necho 3";
+        assert_eq!(calc_preview_height(Some(multi), 80, 10), 5);
+
+        // Clamped by max_height
+        assert_eq!(calc_preview_height(Some(multi), 80, 4), 4);
+
+        // Extreme small max_height
+        assert_eq!(calc_preview_height(Some(multi), 80, 2), 2);
+    }
+
+    #[test]
+    fn dynamic_vs_fixed_preview_height() {
+        let (_dir, arena) = make_test_arena(&[
+            "1000\t50\t0\t/home\tline1\\nline2\\nline3\\nline4\\nline5",
+        ]);
+        let mut dash = Dashboard::new(Theme::Dark, 80, 30, None, &arena);
+
+        // Default is Dynamic: command has 5 lines -> 5 + 2 = 7 height
+        assert_eq!(dash.preview_mode, PreviewMode::Dynamic);
+        assert_eq!(dash.preview_height(&arena, 30, 80), 7);
+
+        // Switch to Fixed: always returns PREVIEW_PANEL_HEIGHT (6)
+        dash.preview_mode = PreviewMode::Fixed;
+        assert_eq!(dash.preview_height(&arena, 30, 80), PREVIEW_PANEL_HEIGHT);
+    }
+
+    #[test]
+    fn bracketed_metadata_color_contract() {
+        let border = Color::Indexed(109);
+        let spans = bracketed("01 Jan 12:00", border);
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content, "[");
+        assert_eq!(spans[0].style.fg, Some(border));
+        assert_eq!(spans[1].content, "01 Jan 12:00");
+        assert_eq!(spans[1].style.fg, Some(Color::Indexed(243)));
+        assert_eq!(spans[2].content, "]");
+        assert_eq!(spans[2].style.fg, Some(border));
+    }
+
+    #[test]
+    fn query_box_icon_padding_and_no_jump_on_input() {
+        let (_dir, arena) = make_test_arena(&["1000\t50\t0\t/home\tls"]);
+        let mut dash = Dashboard::new(Theme::Dark, 80, 24, None, &arena);
+        let mut token_cache = TokenCache::new();
+        let mut preview_cache = PreviewCache::new();
+        let layout = compute_master_layout(Rect::new(0, 0, 80, 24), PREVIEW_PANEL_HEIGHT);
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+
+        // 1. When query is empty: prompt icon '' is displayed at q_inner.x, cursor is at q_inner.x
+        terminal
+            .draw(|f| {
+                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache, layout);
+            })
+            .expect("draw");
+
+        let q_inner = layout.query_inner();
+        let buffer_empty = terminal.backend().buffer().clone();
+        assert_eq!(
+            buffer_empty[(q_inner.x, q_inner.y)].symbol(),
+            "",
+            "When query is empty, magnifying glass icon must be rendered"
+        );
+        let cursor_pos = terminal.get_cursor_position().expect("cursor pos");
+        assert_eq!(cursor_pos.x, q_inner.x);
+        assert_eq!(cursor_pos.y, q_inner.y);
+
+        // 2. When query has input: icon disappears, text starts directly at q_inner.x (no extra spaces!)
+        dash.insert_char('c');
+        dash.insert_char('m');
+        dash.insert_char('d');
+        assert_eq!(dash.query, "cmd");
+        assert_eq!(dash.cursor, 3);
+
+        terminal
+            .draw(|f| {
+                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache, layout);
+            })
+            .expect("draw");
+
+        let buffer_typed = terminal.backend().buffer().clone();
+        assert_ne!(
+            buffer_typed[(q_inner.x, q_inner.y)].symbol(),
+            "",
+            "When typing, magnifying glass icon must disappear"
+        );
+        assert_eq!(
+            buffer_typed[(q_inner.x, q_inner.y)].symbol(),
+            "c",
+            "Typed text must start directly at q_inner.x, on that same spot"
+        );
+        assert_eq!(
+            buffer_typed[(q_inner.x + 1, q_inner.y)].symbol(),
+            "m"
+        );
+        assert_eq!(
+            buffer_typed[(q_inner.x + 2, q_inner.y)].symbol(),
+            "d"
+        );
+
+        let typed_cursor_pos = terminal.get_cursor_position().expect("cursor pos");
+        assert_eq!(typed_cursor_pos.x, q_inner.x + 3);
+        assert_eq!(typed_cursor_pos.y, q_inner.y);
     }
 }

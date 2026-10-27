@@ -55,10 +55,19 @@ pub enum Theme {
     Light,
 }
 
+/// Preview sizing mode.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PreviewMode {
+    #[default]
+    Dynamic,
+    Fixed,
+}
+
 /// Application configuration.
 pub struct Config {
     pub history_path:     PathBuf,
     pub scroll_off:       u16,
+    pub preview_mode:     PreviewMode,
     pub exclude_commands: Vec<String>,
     pub secret_patterns:  Vec<String>,
 }
@@ -374,6 +383,13 @@ impl Config {
         }
         if let Ok(val) = std::env::var("XSTORY_HISTORY_PATH") { cfg.history_path = PathBuf::from(val); }
         if let Ok(val) = std::env::var("XSTORY_SCROLL_OFF") && let Ok(n) = val.parse::<u16>() { cfg.scroll_off = n; }
+        if let Ok(val) = std::env::var("XSTORY_PREVIEW") {
+            if val.eq_ignore_ascii_case("fixed") {
+                cfg.preview_mode = PreviewMode::Fixed;
+            } else if val.eq_ignore_ascii_case("dynamic") {
+                cfg.preview_mode = PreviewMode::Dynamic;
+            }
+        }
         cfg
     }
 
@@ -385,6 +401,7 @@ impl Config {
         Self {
             history_path,
             scroll_off: 4,
+            preview_mode: PreviewMode::Dynamic,
             exclude_commands: vec!["exit".into(), "logout".into(), "clear".into()],
             secret_patterns: vec!["AWS_SECRET".into(), "GITHUB_TOKEN".into(), "--password".into()],
         }
@@ -400,6 +417,8 @@ impl Config {
             match (k.trim(), v.trim()) {
                 ("history_path", v) => cfg.history_path = PathBuf::from(v),
                 ("scroll_off", v) => if let Ok(n) = v.parse() { cfg.scroll_off = n; },
+                ("preview" | "preview_mode", "fixed") => cfg.preview_mode = PreviewMode::Fixed,
+                ("preview" | "preview_mode", "dynamic") => cfg.preview_mode = PreviewMode::Dynamic,
                 ("exclude_commands", v) => cfg.exclude_commands = v.split(',').map(|s| s.trim().to_owned()).collect(),
                 ("secret_patterns", v) => cfg.secret_patterns = v.split(',').map(|s| s.trim().to_owned()).collect(),
                 _ => {}
