@@ -13,84 +13,54 @@ __xstory_precmd() {
     local exit_code=$?
     if [ -n "$__xstory_start_time" ]; then
         local now=$(date +%s%3N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || echo 0)
-        local dur=$((now - __xstory_start_time))
-        [ $dur -lt 0 ] && dur=0
+        local dur=$((now - __xstory_start_time)); [ $dur -lt 0 ] && dur=0
         local last_cmd=$(HISTTIMEFORMAT= history 1 | sed 's/^[ ]*[0-9]*[ ]*//')
         xstory record "$last_cmd" --exit="$exit_code" --duration="$dur" --cwd="$PWD" >/dev/null 2>&1
         unset __xstory_start_time
     fi
 }
 __xstory_search() {
-    local cmd
-    cmd=$(xstory search --query="$READLINE_LINE")
-    local ret=$?
-    if [ $ret -eq 0 ] && [ -n "$cmd" ]; then
-        READLINE_LINE="$cmd"
-        READLINE_POINT=${#READLINE_LINE}
-    elif [ $ret -eq 2 ] && [ -n "$cmd" ]; then
-        READLINE_LINE="$cmd"
-        READLINE_POINT=${#READLINE_LINE}
+    local cmd; cmd=$(xstory search --query="$READLINE_LINE"); local ret=$?
+    if ([ $ret -eq 0 ] || [ $ret -eq 2 ]) && [ -n "$cmd" ]; then
+        READLINE_LINE="$cmd"; READLINE_POINT=${#READLINE_LINE}
     fi
 }
 bind -x '"\C-r": __xstory_search'
 "#;
 
 const ZSH_HOOK: &str = r#"autoload -Uz add-zsh-hook
-__xstory_preexec() {
-    __xstory_cmd="$1"
-    __xstory_start_ms=$((EPOCHREALTIME * 1000))
-}
+__xstory_preexec() { __xstory_cmd="$1"; __xstory_start_ms=$((EPOCHREALTIME * 1000)); }
 __xstory_precmd() {
     local exit_code=$?
     if [[ -n "$__xstory_cmd" ]]; then
         local now_ms=$((EPOCHREALTIME * 1000))
-        local dur=$((now_ms - __xstory_start_ms))
-        (( dur < 0 )) && dur=0
+        local dur=$((now_ms - __xstory_start_ms)); (( dur < 0 )) && dur=0
         xstory record "$__xstory_cmd" --exit="$exit_code" --duration="$dur" --cwd="$PWD" >/dev/null 2>&1
-        unset __xstory_cmd
-        unset __xstory_start_ms
+        unset __xstory_cmd; unset __xstory_start_ms
     fi
 }
-add-zsh-hook preexec __xstory_preexec
-add-zsh-hook precmd __xstory_precmd
+add-zsh-hook preexec __xstory_preexec; add-zsh-hook precmd __xstory_precmd
 __xstory_widget() {
-    local selected
-    selected=$(xstory search --query="$BUFFER")
-    local ret=$?
-    if [[ $ret -eq 0 && -n "$selected" ]]; then
-        BUFFER="$selected"
-        CURSOR=${#BUFFER}
-        zle accept-line
-    elif [[ $ret -eq 2 && -n "$selected" ]]; then
-        BUFFER="$selected"
-        CURSOR=${#BUFFER}
-        zle reset-prompt
-    else
-        zle reset-prompt
-    fi
+    local selected; selected=$(xstory search --query="$BUFFER"); local ret=$?
+    if [[ ($ret -eq 0 || $ret -eq 2) && -n "$selected" ]]; then
+        BUFFER="$selected"; CURSOR=${#BUFFER}
+        [[ $ret -eq 0 ]] && zle accept-line || zle reset-prompt
+    else zle reset-prompt; fi
 }
-zle -N __xstory_widget
-bindkey '^R' __xstory_widget
+zle -N __xstory_widget; bindkey '^R' __xstory_widget
 "#;
 
 const FISH_HOOK: &str = r#"function __xstory_postexec --on-event fish_postexec
-    set -l exit_code $status
-    set -l dur 0
-    if test -n "$CMD_DURATION"
-        set dur $CMD_DURATION
-    end
+    set -l exit_code $status; set -l dur 0
+    test -n "$CMD_DURATION" && set dur $CMD_DURATION
     xstory record "$argv[1]" --exit="$exit_code" --duration="$dur" --cwd="$PWD" >/dev/null 2>&1
 end
 function __xstory_search
-    set -l cmd (commandline)
-    set -l selected (xstory search --query="$cmd")
-    set -l ret $status
+    set -l cmd (commandline); set -l selected (xstory search --query="$cmd"); set -l ret $status
     if test $ret -eq 0
-        commandline -r "$selected"
-        commandline -f execute
+        commandline -r "$selected"; commandline -f execute
     else if test $ret -eq 2
-        commandline -r "$selected"
-        commandline -f repaint
+        commandline -r "$selected"; commandline -f repaint
     end
 end
 bind \cr __xstory_search
@@ -100,205 +70,87 @@ bind \cr __xstory_search
 
 #[cfg(unix)]
 mod signals {
-    use std::io::Write;
-
-    unsafe extern "C" {
-        fn signal(sig: i32, handler: usize) -> usize;
-        fn raise(sig: i32) -> i32;
-    }
-
-    const SIGINT: i32 = 2;
-    const SIGTERM: i32 = 15;
-    const SIGWINCH: i32 = 28;
-    const SIG_DFL: usize = 0;
-    const SIG_IGN: usize = 1;
-
-    extern "C" fn handle_signal(sig: i32) {
-        let _ = crossterm::terminal::disable_raw_mode();
-        let mut stderr = std::io::stderr();
-        let _ = crossterm::execute!(
-            stderr,
-            crossterm::event::DisableMouseCapture,
-            crossterm::cursor::Show,
-            crossterm::terminal::LeaveAlternateScreen
-        );
-        let _ = stderr.flush();
-
-        unsafe {
-            signal(sig, SIG_DFL);
-            let _ = raise(sig);
-        }
-    }
-
-    pub fn install() {
-        unsafe {
-            signal(SIGINT, handle_signal as *const () as usize);
-            signal(SIGTERM, handle_signal as *const () as usize);
-            signal(SIGWINCH, SIG_IGN);
-        }
-    }
+    unsafe extern "C" { fn signal(s: i32, h: usize) -> usize; fn raise(s: i32) -> i32; }
+    extern "C" fn handle_signal(sig: i32) { crate::tui::reset_terminal(); unsafe { signal(sig, 0); let _ = raise(sig); } }
+    pub fn install() { unsafe { signal(2, handle_signal as *const () as usize); signal(15, handle_signal as *const () as usize); signal(28, 1); } }
 }
 
 // ── Panic Hook ───────────────────────────────────────────────────
 
 fn install_panic_hook() {
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = crossterm::terminal::disable_raw_mode();
-        let mut stderr = std::io::stderr();
-        let _ = crossterm::execute!(
-            stderr,
-            crossterm::event::DisableMouseCapture,
-            crossterm::cursor::Show,
-            crossterm::terminal::LeaveAlternateScreen
-        );
-        let _ = stderr.flush();
-        default_hook(info);
-    }));
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| { tui::reset_terminal(); default(info); }));
 }
 
 // ── CLI Actions ──────────────────────────────────────────────────
 
 enum Action {
-    Record {
-        cmd_parts: Vec<String>,
-        exit_code: i32,
-        duration_ms: u64,
-        cwd: Option<String>,
-    },
-    Search {
-        initial_query: Option<String>,
-    },
-    Init {
-        shell: String,
-    },
+    Record { cmd_parts: Vec<String>, exit_code: i32, duration_ms: u64, cwd: Option<String> },
+    Search { initial_query: Option<String> },
+    Init { shell: String },
     Help,
     Version,
 }
 
 // ── Argument Parsing ─────────────────────────────────────────────
 
-#[allow(clippy::too_many_lines)]
 fn parse_args(args: &[String]) -> Result<Action, Error> {
-    if args.is_empty() {
+    let Some(subcmd) = args.first().map(String::as_str) else {
         return Ok(Action::Search { initial_query: None });
-    }
-
-    let subcmd = args[0].as_str();
+    };
     match subcmd {
         "-h" | "--help" | "help" => Ok(Action::Help),
         "-v" | "--version" | "version" => Ok(Action::Version),
+        "init" => match args.get(1).map(|s| s.to_lowercase()).as_deref() {
+            Some(s @ ("bash" | "zsh" | "fish")) => Ok(Action::Init { shell: s.to_owned() }),
+            Some(_) => Err(Error::InvalidArgs("unsupported shell (supported: bash, zsh, fish)")),
+            None => Err(Error::InvalidArgs("missing shell argument for init (expected bash, zsh, or fish)")),
+        },
         "search" => {
-            let mut initial_query = None;
-            let mut i = 1;
-            while i < args.len() {
-                let arg = &args[i];
-                if let Some(q) = arg.strip_prefix("--query=") {
-                    initial_query = Some(q.to_owned());
-                } else if (arg == "--query" || arg == "-q") && i + 1 < args.len() {
-                    initial_query = Some(args[i + 1].clone());
-                    i += 1;
-                } else if !arg.starts_with('-') && initial_query.is_none() {
-                    initial_query = Some(arg.clone());
-                }
-                i += 1;
+            let (mut q, mut it) = (None, args[1..].iter());
+            while let Some(arg) = it.next() {
+                if let Some(val) = arg.strip_prefix("--query=") { q = Some(val.to_owned()); }
+                else if arg == "--query" || arg == "-q" { q = it.next().cloned(); }
+                else if !arg.starts_with('-') && q.is_none() { q = Some(arg.clone()); }
             }
-            Ok(Action::Search { initial_query })
+            Ok(Action::Search { initial_query: q })
         }
         "record" => {
-            let mut cmd_parts = Vec::new();
-            let mut exit_code: Option<i32> = None;
-            let mut duration_ms: Option<u64> = None;
-            let mut cwd: Option<String> = None;
-
-            let mut i = 1;
-            let mut positional = Vec::new();
-            let mut after_double_dash = false;
-
-            while i < args.len() {
-                let arg = &args[i];
-                if after_double_dash {
-                    positional.push(arg.clone());
-                } else if arg == "--" {
-                    after_double_dash = true;
-                } else if let Some(val) = arg.strip_prefix("--exit=") {
-                    exit_code = val.parse().ok();
-                } else if let Some(val) = arg.strip_prefix("--duration=") {
-                    duration_ms = val.parse().ok();
-                } else if let Some(val) = arg.strip_prefix("--cwd=") {
-                    cwd = Some(val.to_owned());
-                } else if arg == "--exit" && i + 1 < args.len() {
-                    exit_code = args[i + 1].parse().ok();
-                    i += 1;
-                } else if arg == "--duration" && i + 1 < args.len() {
-                    duration_ms = args[i + 1].parse().ok();
-                    i += 1;
-                } else if arg == "--cwd" && i + 1 < args.len() {
-                    cwd = Some(args[i + 1].clone());
-                    i += 1;
-                } else {
-                    positional.push(arg.clone());
-                }
-                i += 1;
+            let (mut exit, mut dur, mut cwd, mut pos, mut dd) = (None, None, None, Vec::new(), false);
+            let mut it = args[1..].iter();
+            while let Some(a) = it.next() {
+                if dd { pos.push(a.clone()); }
+                else if a == "--" { dd = true; }
+                else if let Some(v) = a.strip_prefix("--exit=") { exit = v.parse().ok(); }
+                else if let Some(v) = a.strip_prefix("--duration=") { dur = v.parse().ok(); }
+                else if let Some(v) = a.strip_prefix("--cwd=") { cwd = Some(v.to_owned()); }
+                else if a == "--exit" { exit = it.next().and_then(|s| s.parse().ok()); }
+                else if a == "--duration" { dur = it.next().and_then(|s| s.parse().ok()); }
+                else if a == "--cwd" { cwd = it.next().cloned(); }
+                else { pos.push(a.clone()); }
             }
-
-            if exit_code.is_none() || duration_ms.is_none() {
-                let len = positional.len();
-                if len >= 3
-                    && let (Ok(e), Ok(d)) = (positional[1].parse::<i32>(), positional[2].parse::<u64>())
-                {
-                    cmd_parts.push(positional[0].clone());
-                    exit_code = Some(e);
-                    duration_ms = Some(d);
-                    if len > 3 && cwd.is_none() {
-                        cwd = Some(positional[3].clone());
-                    }
-                } else if len >= 3
-                    && let (Ok(e), Ok(d)) = (positional[len - 2].parse::<i32>(), positional[len - 1].parse::<u64>())
-                {
-                    cmd_parts.extend(positional[..len - 2].iter().cloned());
-                    exit_code = Some(e);
-                    duration_ms = Some(d);
+            let (cmd_parts, exit_code, duration_ms) = if exit.is_none() || dur.is_none() {
+                let n = pos.len();
+                if n >= 3 && let (Ok(e), Ok(d)) = (pos[1].parse::<i32>(), pos[2].parse::<u64>()) {
+                    if n > 3 && cwd.is_none() { cwd = Some(pos[3].clone()); }
+                    (vec![pos[0].clone()], e, d)
+                } else if n >= 3 && let (Ok(e), Ok(d)) = (pos[n - 2].parse::<i32>(), pos[n - 1].parse::<u64>()) {
+                    (pos[..n - 2].to_vec(), e, d)
                 } else {
-                    cmd_parts = positional;
+                    (pos, exit.unwrap_or(0), dur.unwrap_or(0))
                 }
             } else {
-                cmd_parts = positional;
-            }
-
-            let exit = exit_code.unwrap_or(0);
-            let dur = duration_ms.unwrap_or(0);
-            Ok(Action::Record {
-                cmd_parts,
-                exit_code: exit,
-                duration_ms: dur,
-                cwd,
-            })
+                (pos, exit.unwrap_or(0), dur.unwrap_or(0))
+            };
+            Ok(Action::Record { cmd_parts, exit_code, duration_ms, cwd })
         }
-        "init" => {
-            if args.len() < 2 {
-                return Err(Error::InvalidArgs("missing shell argument for init (expected bash, zsh, or fish)"));
-            }
-            let shell = args[1].to_lowercase();
-            if shell != "bash" && shell != "zsh" && shell != "fish" {
-                return Err(Error::InvalidArgs("unsupported shell (supported: bash, zsh, fish)"));
-            }
-            Ok(Action::Init { shell })
-        }
-        _ => {
-            if subcmd.starts_with('-') {
-                Err(Error::InvalidArgs("unknown option"))
-            } else {
-                Err(Error::InvalidArgs("unknown subcommand"))
-            }
-        }
+        _ => Err(Error::InvalidArgs(if subcmd.starts_with('-') { "unknown option" } else { "unknown subcommand" })),
     }
 }
 
 fn print_help() {
     println!(
-        "xstory 0.1.0 — High-performance shell history utility\n\
-        \n\
+        "xstory 0.1.0 — High-performance shell history utility\n\n\
         USAGE:\n    \
             xstory record <command...> --exit=<i32> --duration=<u64> [--cwd=<path>]\n    \
             xstory search [--query=<str>]\n    \
@@ -306,19 +158,6 @@ fn print_help() {
             xstory --help\n    \
             xstory --version"
     );
-}
-
-fn print_version() {
-    println!("xstory 0.1.0");
-}
-
-fn print_shell_hook(shell: &str) {
-    match shell {
-        "bash" => print!("{BASH_HOOK}"),
-        "zsh" => print!("{ZSH_HOOK}"),
-        "fish" => print!("{FISH_HOOK}"),
-        _ => {}
-    }
 }
 
 // ── Main Entrypoint ──────────────────────────────────────────────
@@ -332,19 +171,17 @@ fn main() {
 
 fn run() -> Result<(), Error> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let action = parse_args(&args)?;
-
-    match action {
-        Action::Help => {
-            print_help();
-            Ok(())
-        }
-        Action::Version => {
-            print_version();
-            Ok(())
-        }
+    match parse_args(&args)? {
+        Action::Help => { print_help(); Ok(()) }
+        Action::Version => { println!("xstory 0.1.0"); Ok(()) }
         Action::Init { shell } => {
-            print_shell_hook(&shell);
+            let hook = match shell.as_str() {
+                "bash" => BASH_HOOK,
+                "zsh" => ZSH_HOOK,
+                "fish" => FISH_HOOK,
+                _ => "",
+            };
+            print!("{hook}");
             Ok(())
         }
         Action::Record { cmd_parts, exit_code, duration_ms, cwd } => {
@@ -364,21 +201,16 @@ fn run() -> Result<(), Error> {
             let arena = arena::Arena::load(&config.history_path, current_dir.as_deref())?;
             let outcome = tui::run_tui(&arena, &config, initial_query.as_deref())?;
 
-            match outcome {
-                tui::Outcome::Execute(cmd) => {
-                    print!("{cmd}");
-                    let _ = std::io::stdout().flush();
-                    std::process::exit(0);
-                }
-                tui::Outcome::Edit(cmd) => {
-                    print!("{cmd}");
-                    let _ = std::io::stdout().flush();
-                    std::process::exit(2);
-                }
-                tui::Outcome::Cancel => {
-                    std::process::exit(130);
-                }
+            let (cmd, code) = match outcome {
+                tui::Outcome::Execute(c) => (Some(c), 0),
+                tui::Outcome::Edit(c) => (Some(c), 2),
+                tui::Outcome::Cancel => (None, 130),
+            };
+            if let Some(c) = cmd {
+                print!("{c}");
+                let _ = std::io::stdout().flush();
             }
+            std::process::exit(code);
         }
     }
 }

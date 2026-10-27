@@ -29,15 +29,50 @@ pub enum TokenKind {
     Plain,
 }
 
-/// Direct-mapped token cache (2048 slots).
-pub struct TokenCache {
-    slots: Box<[(u64, Vec<Span>); 2048]>,
+// ── Generic AstCache ─────────────────────────────────────────────
+
+/// Direct-mapped AST cache with generic capacity N (must be power of two).
+pub struct AstCache<const N: usize> {
+    slots: Box<[(u64, Vec<Span>); N]>,
 }
 
-/// Preview cache (128 slots) for syntax-highlighted multi-line blocks.
-pub struct PreviewCache {
-    slots: Box<[(u64, Vec<Span>); 128]>,
+impl<const N: usize> AstCache<N> {
+    #[must_use]
+    pub fn new() -> Self {
+        let v: Vec<(u64, Vec<Span>)> = (0..N).map(|_| (0, Vec::new())).collect();
+        let Ok(slots) = v.into_boxed_slice().try_into() else { unreachable!() };
+        Self { slots }
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn get_or_parse<'a>(&'a mut self, cmd: &str) -> &'a [Span] {
+        if cmd.is_empty() {
+            return &[];
+        }
+        let h = match fnv1a(cmd.as_bytes()) {
+            0 => 1,
+            other => other,
+        };
+        let slot = (h as usize) & (N - 1);
+        if self.slots[slot].0 == h {
+            return &self.slots[slot].1;
+        }
+
+        let mut spans = Vec::new();
+        parse_bash(cmd, &mut spans);
+        self.slots[slot] = (h, spans);
+        &self.slots[slot].1
+    }
 }
+
+impl<const N: usize> Default for AstCache<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub type TokenCache = AstCache<2048>;
+pub type PreviewCache = AstCache<128>;
 
 // ── Thread-local Parser ──────────────────────────────────────────
 
@@ -51,100 +86,29 @@ thread_local! {
     });
 }
 
-// ── TokenCache & PreviewCache ────────────────────────────────────
-
-impl TokenCache {
-    #[must_use]
-    pub fn new() -> Self {
-        let mut v: Vec<(u64, Vec<Span>)> = Vec::with_capacity(2048);
-        for _ in 0..2048 {
-            v.push((0, Vec::new()));
-        }
-        let Ok(slots) = v.into_boxed_slice().try_into() else {
-            unreachable!();
-        };
-        Self { slots }
-    }
-}
-
-impl Default for TokenCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PreviewCache {
-    #[must_use]
-    pub fn new() -> Self {
-        let mut v: Vec<(u64, Vec<Span>)> = Vec::with_capacity(128);
-        for _ in 0..128 {
-            v.push((0, Vec::new()));
-        }
-        let Ok(slots) = v.into_boxed_slice().try_into() else {
-            unreachable!();
-        };
-        Self { slots }
-    }
-}
-
-impl Default for PreviewCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // ── AST Traversal & Mapping ──────────────────────────────────────
 
+#[allow(clippy::cast_possible_truncation)]
 fn collect_spans(node: Node<'_>, cmd: &[u8], spans: &mut Vec<Span>) {
-    let kind = node.kind();
-    let start_byte = node.start_byte();
-    let end_byte = node.end_byte();
+    let (sb, eb) = (node.start_byte(), node.end_byte());
+    if sb >= eb || eb > u16::MAX as usize { return; }
+    let (start, end) = (sb as u16, eb as u16);
 
-    if start_byte >= end_byte || end_byte > u16::MAX as usize {
+    let kind = match node.kind() {
+        "command_name" => Some(TokenKind::Command),
+        "comment" => Some(TokenKind::Comment),
+        "string" | "raw_string" | "heredoc_body" | "heredoc_start" => Some(TokenKind::String),
+        "variable_name" | "simple_expansion" | "expansion" => Some(TokenKind::Variable),
+        "|" | "||" | "&&" | "&" | ";" | ";;" | ">" | ">>" | "<" | "<<" | "<<<" | ">&" | "<&" | "|&" | "$" => Some(TokenKind::Operator),
+        "word" => Some(if cmd[sb..eb].starts_with(b"-") { TokenKind::Flag } else { TokenKind::Plain }),
+        _ => None,
+    };
+
+    if let Some(kind) = kind {
+        spans.push(Span { start, end, kind });
         return;
     }
 
-    #[allow(clippy::cast_possible_truncation)]
-    let start = start_byte as u16;
-    #[allow(clippy::cast_possible_truncation)]
-    let end = end_byte as u16;
-
-    // Check specific node types
-    match kind {
-        "command_name" => {
-            spans.push(Span { start, end, kind: TokenKind::Command });
-            return;
-        }
-        "comment" => {
-            spans.push(Span { start, end, kind: TokenKind::Comment });
-            return;
-        }
-        "string" | "raw_string" | "heredoc_body" | "heredoc_start" => {
-            spans.push(Span { start, end, kind: TokenKind::String });
-            return;
-        }
-        "variable_name" | "simple_expansion" | "expansion" => {
-            spans.push(Span { start, end, kind: TokenKind::Variable });
-            return;
-        }
-        "|" | "||" | "&&" | "&" | ";" | ";;" | ">" | ">>" | "<" | "<<" | "<<<" | ">&" | "<&" | "|&" | "$" => {
-            spans.push(Span { start, end, kind: TokenKind::Operator });
-            return;
-        }
-        "word" => {
-            // Is it a flag? (Starts with '-')
-            let slice = &cmd[start_byte..end_byte];
-            if slice.starts_with(b"-") {
-                spans.push(Span { start, end, kind: TokenKind::Flag });
-            } else {
-                spans.push(Span { start, end, kind: TokenKind::Plain });
-            }
-            return;
-        }
-        _ => {}
-    }
-
-    // Recurse into children
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_spans(child, cmd, spans);
@@ -164,73 +128,37 @@ fn parse_bash(cmd: &str, spans: &mut Vec<Span>) {
 // ── Public API ───────────────────────────────────────────────────
 
 /// Tokenize a command string into colored spans using tree-sitter.
-/// Uses the direct-mapped cache to avoid re-parsing unchanged strings.
-#[allow(clippy::cast_possible_truncation)]
+#[inline]
 pub fn tokenize<'a>(cache: &'a mut TokenCache, cmd: &str) -> &'a [Span] {
-    if cmd.is_empty() {
-        return &[];
-    }
-    let h = match fnv1a(cmd.as_bytes()) {
-        0 => 1,
-        other => other,
-    };
-    let slot = (h as usize) & (2048 - 1);
-    if cache.slots[slot].0 == h {
-        return &cache.slots[slot].1;
-    }
-
-    let mut spans = Vec::new();
-    parse_bash(cmd, &mut spans);
-    cache.slots[slot] = (h, spans);
-    &cache.slots[slot].1
+    cache.get_or_parse(cmd)
 }
 
 /// Produce full syntax-highlighted preview for a multi-line command.
-#[allow(clippy::cast_possible_truncation)]
+#[inline]
 pub fn preview<'a>(cache: &'a mut PreviewCache, cmd: &str) -> &'a [Span] {
-    if cmd.is_empty() {
-        return &[];
-    }
-    let h = match fnv1a(cmd.as_bytes()) {
-        0 => 1,
-        other => other,
-    };
-    let slot = (h as usize) & (128 - 1);
-    if cache.slots[slot].0 == h {
-        return &cache.slots[slot].1;
-    }
-
-    let mut spans = Vec::new();
-    parse_bash(cmd, &mut spans);
-    cache.slots[slot] = (h, spans);
-    &cache.slots[slot].1
+    cache.get_or_parse(cmd)
 }
 
 /// Map `TokenKind` to ANSI color based on `Theme`.
 #[must_use]
 pub fn style_for(kind: TokenKind, theme: Theme) -> Style {
-    match theme {
-        // kanagawa-dragon: 109=dragonBlue2, 103=dragonViolet, 108=dragonGreen2,
-        //   180=dragonYellow, 167=dragonRed, 243=dragonAsh, 251=dragonWhite
-        Theme::Dark => match kind {
-            TokenKind::Command => Style::default().fg(Color::Indexed(109)).add_modifier(Modifier::BOLD),
-            TokenKind::Flag => Style::default().fg(Color::Indexed(103)).add_modifier(Modifier::ITALIC),
-            TokenKind::String => Style::default().fg(Color::Indexed(108)).add_modifier(Modifier::ITALIC),
-            TokenKind::Variable => Style::default().fg(Color::Indexed(180)),
-            TokenKind::Operator => Style::default().fg(Color::Indexed(167)),
-            TokenKind::Comment => Style::default().fg(Color::Indexed(243)).add_modifier(Modifier::ITALIC),
-            TokenKind::Plain => Style::default().fg(Color::Indexed(251)),
-        },
-        Theme::Light => match kind {
-            TokenKind::Command => Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
-            TokenKind::Flag => Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC),
-            TokenKind::String => Style::default().fg(Color::Green).add_modifier(Modifier::ITALIC),
-            TokenKind::Variable => Style::default().fg(Color::Magenta),
-            TokenKind::Operator => Style::default().fg(Color::Red),
-            TokenKind::Comment => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
-            TokenKind::Plain => Style::default().fg(Color::Black),
-        },
-    }
+    let (c, m) = match (theme, kind) {
+        (Theme::Dark, TokenKind::Command) => (Color::Indexed(109), Modifier::BOLD),
+        (Theme::Dark, TokenKind::Flag) => (Color::Indexed(103), Modifier::ITALIC),
+        (Theme::Dark, TokenKind::String) => (Color::Indexed(108), Modifier::ITALIC),
+        (Theme::Dark, TokenKind::Variable) => (Color::Indexed(180), Modifier::empty()),
+        (Theme::Dark, TokenKind::Operator) => (Color::Indexed(167), Modifier::empty()),
+        (Theme::Dark, TokenKind::Comment) => (Color::Indexed(243), Modifier::ITALIC),
+        (Theme::Dark, TokenKind::Plain) => (Color::Indexed(251), Modifier::empty()),
+        (Theme::Light, TokenKind::Command) => (Color::Blue, Modifier::BOLD),
+        (Theme::Light, TokenKind::Flag) => (Color::Yellow, Modifier::ITALIC),
+        (Theme::Light, TokenKind::String) => (Color::Green, Modifier::ITALIC),
+        (Theme::Light, TokenKind::Variable) => (Color::Magenta, Modifier::empty()),
+        (Theme::Light, TokenKind::Operator) => (Color::Red, Modifier::empty()),
+        (Theme::Light, TokenKind::Comment) => (Color::DarkGray, Modifier::ITALIC),
+        (Theme::Light, TokenKind::Plain) => (Color::Black, Modifier::empty()),
+    };
+    Style::default().fg(c).add_modifier(m)
 }
 
 // ── Tests ────────────────────────────────────────────────────────

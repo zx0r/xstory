@@ -73,15 +73,13 @@ impl Dashboard {
     ) -> Self {
         let query = initial_q.unwrap_or("").to_owned();
         let cursor = query.chars().count();
-        let scope = Scope::Global;
-        let dedup_total = arena.scope_indices(scope).len();
-        let result = search::search(arena, &query, scope);
-
+        let dedup_total = arena.scope_indices(Scope::Global).len();
+        let result = search::search(arena, &query, Scope::Global);
         Self {
             query,
             cursor,
             focus: FocusedPanel::Query,
-            scope,
+            scope: Scope::Global,
             result,
             dedup_total,
             selected: 0,
@@ -94,85 +92,62 @@ impl Dashboard {
         }
     }
 
+    #[inline]
+    fn char_to_byte(&self, char_idx: usize) -> usize {
+        self.query.char_indices().nth(char_idx).map_or(self.query.len(), |(i, _)| i)
+    }
+
     /// Insert a character at current cursor position (UTF-8 safe).
     pub fn insert_char(&mut self, c: char) {
-        let byte_offset = self.query
-            .char_indices()
-            .nth(self.cursor)
-            .map_or(self.query.len(), |(i, _)| i);
-        self.query.insert(byte_offset, c);
+        let b = self.char_to_byte(self.cursor);
+        self.query.insert(b, c);
         self.cursor += 1;
     }
 
     /// Delete character immediately before the cursor (UTF-8 safe).
     pub fn delete_char_before(&mut self) {
         if self.cursor > 0 {
-            let target_char = self.cursor - 1;
-            if let Some((start_byte, ch)) = self.query.char_indices().nth(target_char) {
-                let end_byte = start_byte + ch.len_utf8();
-                self.query.drain(start_byte..end_byte);
-                self.cursor -= 1;
-            }
+            let (s, e) = (self.char_to_byte(self.cursor - 1), self.char_to_byte(self.cursor));
+            self.query.drain(s..e);
+            self.cursor -= 1;
         }
     }
 
     /// Delete from start of query up to cursor (Ctrl-U).
     pub fn delete_to_start(&mut self) {
         if self.cursor > 0 {
-            let byte_offset = self.query
-                .char_indices()
-                .nth(self.cursor)
-                .map_or(self.query.len(), |(i, _)| i);
-            self.query.drain(..byte_offset);
+            let e = self.char_to_byte(self.cursor);
+            self.query.drain(..e);
             self.cursor = 0;
         }
     }
 
     /// Delete previous word before cursor (Ctrl-W).
     pub fn delete_word_before(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        let chars: Vec<char> = self.query.chars().collect();
-        let mut i = self.cursor;
-        while i > 0 && chars[i - 1].is_whitespace() {
-            i -= 1;
-        }
-        while i > 0 && !chars[i - 1].is_whitespace() {
-            i -= 1;
-        }
-        let del_count = self.cursor - i;
-        let start_byte = self.query
-            .char_indices()
-            .nth(i)
-            .map_or(self.query.len(), |(idx, _)| idx);
-        let end_byte = self.query
-            .char_indices()
-            .nth(self.cursor)
-            .map_or(self.query.len(), |(idx, _)| idx);
-        self.query.drain(start_byte..end_byte);
-        self.cursor -= del_count;
+        if self.cursor == 0 { return; }
+        let end = self.char_to_byte(self.cursor);
+        let prefix = &self.query[..end];
+        let trimmed = prefix.trim_end();
+        let start = trimmed.rfind(char::is_whitespace).map_or(0, |i| {
+            i + prefix[i..].chars().next().map_or(1, char::len_utf8)
+        });
+        self.cursor -= prefix[start..end].chars().count();
+        self.query.drain(start..end);
     }
 
-    /// Move cursor left one character.
-    pub const fn move_cursor_left(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
+    /// Trigger search query change, resetting selection and scroll.
+    pub fn on_query_mutated(&mut self, arena: &Arena) {
+        self.focus = FocusedPanel::Query;
+        self.result = search::search(arena, &self.query, self.scope);
+        self.selected = 0;
+        self.preview_scroll = 0;
+        self.dirty = true;
     }
 
-    /// Move cursor right one character.
-    pub fn move_cursor_right(&mut self) {
-        self.cursor = (self.cursor + 1).min(self.query.chars().count());
-    }
-
-    /// Move cursor to line start.
-    pub const fn move_cursor_home(&mut self) {
-        self.cursor = 0;
-    }
-
-    /// Move cursor to line end.
-    pub fn move_cursor_end(&mut self) {
-        self.cursor = self.query.chars().count();
-    }
+    pub const fn move_cursor_left(&mut self) { self.cursor = self.cursor.saturating_sub(1); }
+    pub fn move_cursor_right(&mut self) { self.cursor = (self.cursor + 1).min(self.query.chars().count()); }
+    pub const fn move_cursor_home(&mut self) { self.cursor = 0; }
+    pub fn move_cursor_end(&mut self) { self.cursor = self.query.chars().count(); }
 
     /// Move selection index up or down with saturation.
     pub fn move_selection(&mut self, delta: isize) {
@@ -181,13 +156,12 @@ impl Dashboard {
             return;
         }
         let max_idx = self.result.indices.len().saturating_sub(1);
-        if delta < 0 {
-            self.selected = self.selected.saturating_sub(delta.unsigned_abs());
+        self.selected = if delta < 0 {
+            self.selected.saturating_sub(delta.unsigned_abs())
         } else {
             #[allow(clippy::cast_sign_loss)]
-            let new_sel = self.selected.saturating_add(delta as usize);
-            self.selected = new_sel.min(max_idx);
-        }
+            self.selected.saturating_add(delta as usize).min(max_idx)
+        };
         self.preview_scroll = 0;
     }
 
@@ -202,24 +176,17 @@ impl Dashboard {
 
     /// Update viewport offset taking `scroll_off` cushion into account.
     pub fn update_viewport(&mut self, visible_rows: usize, scroll_off: u16) {
-        if visible_rows == 0 {
-            self.viewport_offset = 0;
-            return;
-        }
         let total = self.result.indices.len();
-        if total <= visible_rows {
+        if visible_rows == 0 || total <= visible_rows {
             self.viewport_offset = 0;
             return;
         }
-
         let m = (scroll_off as usize).min(visible_rows.saturating_sub(1) / 2);
-
         if self.selected < self.viewport_offset + m {
             self.viewport_offset = self.selected.saturating_sub(m);
         } else if self.selected + m >= self.viewport_offset + visible_rows {
             self.viewport_offset = (self.selected + m + 1).saturating_sub(visible_rows);
         }
-
         if self.viewport_offset + visible_rows > total {
             self.viewport_offset = total.saturating_sub(visible_rows);
         }
@@ -227,20 +194,15 @@ impl Dashboard {
 
     /// Scroll preview pane up or down.
     pub fn scroll_preview(&mut self, delta: isize, max_lines: usize) {
-        if delta < 0 {
-            self.preview_scroll = self.preview_scroll.saturating_sub(delta.unsigned_abs());
+        self.preview_scroll = if delta < 0 {
+            self.preview_scroll.saturating_sub(delta.unsigned_abs())
         } else {
             #[allow(clippy::cast_sign_loss)]
-            let new_scroll = self.preview_scroll.saturating_add(delta as usize);
-            self.preview_scroll = new_scroll.min(max_lines.saturating_sub(1));
-        }
+            self.preview_scroll.saturating_add(delta as usize).min(max_lines.saturating_sub(1))
+        };
     }
 
-    /// Resize terminal geometry.
-    pub const fn resize(&mut self, w: u16, h: u16) {
-        self.width = w;
-        self.height = h;
-    }
+    pub const fn resize(&mut self, w: u16, h: u16) { self.width = w; self.height = h; }
 
     /// Get command string for current selection if present.
     #[must_use]
@@ -255,61 +217,36 @@ impl Dashboard {
 /// Detect terminal theme using 4-tier cascade.
 #[must_use]
 pub fn detect_theme() -> Theme {
-    if let Some(theme) = probe_env_vars() {
-        return theme;
-    }
-    if let Some(theme) = probe_os_preferences() {
-        return theme;
-    }
-    Theme::Dark
-}
-
-fn probe_env_vars() -> Option<Theme> {
-    // Check $COLORFGBG (format: "fg;bg")
     if let Ok(val) = std::env::var("COLORFGBG")
         && let Some(bg_str) = val.rsplit(';').next()
         && let Ok(bg_num) = bg_str.trim().parse::<u8>()
     {
         return match bg_num {
-            0..=6 | 8 => Some(Theme::Dark),
-            7 | 9..=15 => Some(Theme::Light),
-            _ => None,
+            0..=6 | 8 => Theme::Dark,
+            _ => Theme::Light,
         };
     }
-
-    // Check $ITERM_PROFILE
     if let Ok(profile) = std::env::var("ITERM_PROFILE") {
         let lower = profile.to_lowercase();
         if lower.contains("light") || lower.contains("white") {
-            return Some(Theme::Light);
+            return Theme::Light;
         }
         if lower.contains("dark") || lower.contains("black") {
-            return Some(Theme::Dark);
+            return Theme::Dark;
         }
     }
-
-    None
-}
-
-fn probe_os_preferences() -> Option<Theme> {
     #[cfg(target_os = "macos")]
+    if let Ok(out) = std::process::Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
     {
-        let output = std::process::Command::new("defaults")
-            .args(["read", "-g", "AppleInterfaceStyle"])
-            .output();
-        if let Ok(out) = output {
-            if out.status.success() {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                if stdout.trim() == "Dark" {
-                    return Some(Theme::Dark);
-                }
-            } else {
-                // Key not found on macOS means standard Light mode
-                return Some(Theme::Light);
-            }
-        }
+        return if out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "Dark" {
+            Theme::Dark
+        } else {
+            Theme::Light
+        };
     }
-    None
+    Theme::Dark
 }
 
 // ── Terminal Setup & Teardown ────────────────────────────────────
@@ -317,27 +254,22 @@ fn probe_os_preferences() -> Option<Theme> {
 fn setup_terminal() -> Result<ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stderr>>, Error> {
     crossterm::terminal::enable_raw_mode()?;
     let mut stderr = std::io::stderr();
-    crossterm::execute!(
-        stderr,
-        crossterm::terminal::EnterAlternateScreen,
-        crossterm::cursor::Hide,
-        crossterm::event::EnableMouseCapture
-    )?;
-    let backend = ratatui::backend::CrosstermBackend::new(stderr);
-    let terminal = ratatui::Terminal::new(backend)?;
-    Ok(terminal)
+    crossterm::execute!(stderr, crossterm::terminal::EnterAlternateScreen, crossterm::cursor::Hide, crossterm::event::EnableMouseCapture)?;
+    Ok(ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stderr))?)
+}
+
+/// Reset terminal state back to normal mode (crossterm).
+pub fn reset_terminal() {
+    let _ = crossterm::terminal::disable_raw_mode();
+    let mut stderr = std::io::stderr();
+    let _ = crossterm::execute!(stderr, crossterm::event::DisableMouseCapture, crossterm::cursor::Show, crossterm::terminal::LeaveAlternateScreen);
+    let _ = stderr.flush();
 }
 
 fn restore_terminal(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stderr>>,
 ) {
-    let _ = crossterm::terminal::disable_raw_mode();
-    let _ = crossterm::execute!(
-        terminal.backend_mut(),
-        crossterm::event::DisableMouseCapture,
-        crossterm::cursor::Show,
-        crossterm::terminal::LeaveAlternateScreen
-    );
+    reset_terminal();
     let _ = terminal.backend_mut().flush();
 }
 
@@ -346,16 +278,12 @@ fn restore_terminal(
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #[must_use]
 pub fn format_timestamp(timestamp_ms: i64) -> String {
-    if timestamp_ms <= 0 {
-        return "--:--".to_owned();
-    }
+    if timestamp_ms <= 0 { return "--:--".to_owned(); }
     let secs = timestamp_ms / 1000;
     let day_sec = secs % 86400;
-    let hour = day_sec / 3600;
-    let min = (day_sec % 3600) / 60;
+    let (hour, min) = (day_sec / 3600, (day_sec % 3600) / 60);
 
-    let days = secs / 86400;
-    let z = days + 719_468;
+    let z = (secs / 86400) + 719_468;
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
     let doe = (z - era * 146_097) as u32;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
@@ -363,25 +291,17 @@ pub fn format_timestamp(timestamp_ms: i64) -> String {
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
-
     let month = match m {
-        1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr",
-        5 => "May", 6 => "Jun", 7 => "Jul", 8 => "Aug",
-        9 => "Sep", 10 => "Oct", 11 => "Nov", 12 => "Dec",
-        _ => "???",
+        1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr", 5 => "May", 6 => "Jun",
+        7 => "Jul", 8 => "Aug", 9 => "Sep", 10 => "Oct", 11 => "Nov", 12 => "Dec", _ => "???",
     };
-
     format!("{d:02} {month} {hour:02}:{min:02}")
 }
 
 fn abbreviate_path(path: &str) -> String {
     if let Ok(home) = std::env::var("HOME") {
-        if path == home {
-            return "~".to_owned();
-        }
-        if let Some(stripped) = path.strip_prefix(&home)
-            && stripped.starts_with('/')
-        {
+        if path == home { return "~".to_owned(); }
+        if let Some(stripped) = path.strip_prefix(&home) && stripped.starts_with('/') {
             return format!("~{stripped}");
         }
     }
@@ -390,13 +310,9 @@ fn abbreviate_path(path: &str) -> String {
 
 fn format_thousands(n: usize) -> String {
     let s = n.to_string();
-    let bytes = s.as_bytes();
-    let len = bytes.len();
-    let commas = (len.saturating_sub(1)) / 3;
-    let mut out = String::with_capacity(len + commas);
-
-    for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, b) in s.bytes().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(b as char);
@@ -410,7 +326,6 @@ pub const TOP_BREATHING_ROOM: u16 = 1;
 pub const ACTION_BAR_HEIGHT: u16 = 1;
 pub const PREVIEW_PANEL_HEIGHT: u16 = 6;
 pub const QUERY_BAR_HEIGHT: u16 = 3;
-
 pub const HORIZONTAL_MARGIN: u16 = 1;
 pub const PANEL_PADDING_HORIZONTAL: u16 = 1;
 pub const PANEL_PADDING: Padding = Padding::horizontal(PANEL_PADDING_HORIZONTAL);
@@ -428,7 +343,7 @@ pub struct MasterLayout {
 /// Compute master layout tree with strict static heights to guarantee zero jitter.
 #[must_use]
 pub fn compute_master_layout(area: Rect) -> MasterLayout {
-    let preview_height = if area.height >= 14 {
+    let p_h = if area.height >= 14 {
         PREVIEW_PANEL_HEIGHT
     } else {
         PREVIEW_PANEL_HEIGHT.min(area.height.saturating_sub(8))
@@ -440,9 +355,9 @@ pub fn compute_master_layout(area: Rect) -> MasterLayout {
         .constraints([
             Constraint::Length(TOP_BREATHING_ROOM),
             Constraint::Length(ACTION_BAR_HEIGHT),
-            Constraint::Min(3),                      // History List (flexible flex)
-            Constraint::Length(preview_height),      // Preview Panel (strictly static)
-            Constraint::Length(QUERY_BAR_HEIGHT),    // Query Bar (fixed height: 3)
+            Constraint::Min(3),
+            Constraint::Length(p_h),
+            Constraint::Length(QUERY_BAR_HEIGHT),
         ])
         .split(area);
 
@@ -465,98 +380,56 @@ pub enum PanelFocus {
 /// Create a unified panel block with standard borders, rounded corners, and unified padding.
 #[must_use]
 pub fn create_panel_block(focus: PanelFocus) -> Block<'static> {
-    let border_color = match focus {
+    let fg = match focus {
         PanelFocus::Focused => Color::Indexed(109),
         PanelFocus::Unfocused => Color::Indexed(241),
     };
-
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
+        .border_style(Style::default().fg(fg))
         .padding(PANEL_PADDING)
 }
 
 impl MasterLayout {
-    #[must_use]
-    pub fn history_inner(self) -> Rect {
-        create_panel_block(PanelFocus::Unfocused).inner(self.history)
-    }
-
-    #[must_use]
-    pub fn preview_inner(self) -> Rect {
-        create_panel_block(PanelFocus::Unfocused).inner(self.preview)
-    }
-
-    #[must_use]
-    pub fn query_inner(self) -> Rect {
-        create_panel_block(PanelFocus::Unfocused).inner(self.query)
-    }
+    #[must_use] pub fn history_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).inner(self.history) }
+    #[must_use] pub fn preview_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).inner(self.preview) }
+    #[must_use] pub fn query_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).inner(self.query) }
 }
 
 #[inline]
 const fn in_rect(col: u16, row: u16, rect: Rect) -> bool {
-    col >= rect.x
-        && col < rect.x.saturating_add(rect.width)
-        && row >= rect.y
-        && row < rect.y.saturating_add(rect.height)
+    col >= rect.x && col < rect.x.saturating_add(rect.width) && row >= rect.y && row < rect.y.saturating_add(rect.height)
 }
 
 fn bracketed<'a>(inner: impl Into<std::borrow::Cow<'a, str>>, style: Style) -> Vec<Span<'a>> {
-    let bracket_style = Style::default().fg(Color::Indexed(241));
-    vec![
-        Span::styled("[", bracket_style),
-        Span::styled(inner, style),
-        Span::styled("]", bracket_style),
-    ]
+    let b = Style::default().fg(Color::Indexed(241));
+    vec![Span::styled("[", b), Span::styled(inner, style), Span::styled("]", b)]
 }
 
 fn split_spans_into_lines(spans: Vec<Span<'_>>) -> Vec<Line<'_>> {
-    let mut lines = Vec::new();
-    let mut current_line_spans = Vec::new();
-
+    let (mut lines, mut cur) = (Vec::new(), Vec::new());
     for span in spans {
-        let style = span.style;
-        let s = span.content.as_ref();
-        for (idx, part) in s.split('\n').enumerate() {
-            if idx > 0 {
-                lines.push(Line::from(std::mem::take(&mut current_line_spans)));
-            }
-            if !part.is_empty() {
-                current_line_spans.push(Span::styled(part.to_string(), style));
-            }
+        for (i, part) in span.content.split('\n').enumerate() {
+            if i > 0 { lines.push(Line::from(std::mem::take(&mut cur))); }
+            if !part.is_empty() { cur.push(Span::styled(part.to_string(), span.style)); }
         }
     }
-
-    if !current_line_spans.is_empty() || lines.is_empty() {
-        lines.push(Line::from(current_line_spans));
-    }
-
+    if !cur.is_empty() || lines.is_empty() { lines.push(Line::from(cur)); }
     lines
 }
 
 // ── Frame Rendering ──────────────────────────────────────────────
 
-#[allow(clippy::option_if_let_else)]
 fn extract_query_term(query: &str) -> &str {
-    let trimmed = query.trim();
-    if let Some(rest) = trimmed.strip_prefix('^') {
-        rest
-    } else if let Some(rest) = trimmed.strip_prefix('\'') {
-        rest
-    } else if let Some(rest) = trimmed.strip_suffix('$') {
-        rest
-    } else {
-        trimmed
-    }
+    let t = query.trim();
+    t.strip_prefix('^')
+        .or_else(|| t.strip_prefix('\''))
+        .or_else(|| t.strip_suffix('$'))
+        .unwrap_or(t)
 }
 
 /// Zero-Destructive AST syntax highlighter with character-level query match overlay.
-///
-/// 1. Maps AST syntax tokens to character style slots.
-/// 2. If a search query is present, performs case-insensitive subsequence match.
-/// 3. Overlays matched characters with `Color::Yellow` + `BOLD` without mutating surrounding syntax.
-/// 4. Coalesces adjacent characters of identical style into zero-copy `Span` slices of `cmd`.
 fn build_highlighted_spans<'a>(
     cmd: &'a str,
     spans: &[syntax::Span],
@@ -566,61 +439,40 @@ fn build_highlighted_spans<'a>(
     if cmd.is_empty() {
         return Vec::new();
     }
-
     let char_offsets: Vec<(usize, char)> = cmd.char_indices().collect();
     let char_count = char_offsets.len();
     if char_count == 0 {
         return Vec::new();
     }
 
-    let base_style = syntax::style_for(syntax::TokenKind::Plain, theme);
-    let mut char_styles = vec![base_style; char_count];
+    let mut char_styles = vec![syntax::style_for(syntax::TokenKind::Plain, theme); char_count];
 
     // 1. AST syntax token layer
     for span in spans {
-        let s_byte = span.start as usize;
-        let e_byte = span.end as usize;
-        let start_char = char_offsets
-            .binary_search_by_key(&s_byte, |&(b, _)| b)
-            .unwrap_or_else(|idx| idx)
-            .min(char_count);
-        let end_char = char_offsets
-            .binary_search_by_key(&e_byte, |&(b, _)| b)
-            .unwrap_or_else(|idx| idx)
-            .min(char_count);
-
-        let style = syntax::style_for(span.kind, theme);
-        for s in &mut char_styles[start_char..end_char] {
-            *s = style;
-        }
+        let (s_b, e_b) = (span.start as usize, span.end as usize);
+        let s_c = char_offsets.binary_search_by_key(&s_b, |&(b, _)| b).unwrap_or_else(|i| i).min(char_count);
+        let e_c = char_offsets.binary_search_by_key(&e_b, |&(b, _)| b).unwrap_or_else(|i| i).min(char_count);
+        char_styles[s_c..e_c].fill(syntax::style_for(span.kind, theme));
     }
 
     // 2. Query match overlay (Zero-Destructive Subsequence Overlay)
     if let Some(q) = query {
-        let query_term = extract_query_term(q);
-        if !query_term.is_empty() {
-            let query_chars: Vec<char> = query_term.chars().collect();
-            let mut match_indices = Vec::with_capacity(query_chars.len());
+        let term = extract_query_term(q);
+        if !term.is_empty() {
+            let q_chars: Vec<char> = term.chars().collect();
+            let mut matches = Vec::with_capacity(q_chars.len());
             let mut q_idx = 0;
-
-            for (t_idx, &(_, t_ch)) in char_offsets.iter().enumerate() {
-                if q_idx < query_chars.len() {
-                    let q_ch = query_chars[q_idx];
-                    if t_ch.eq_ignore_ascii_case(&q_ch)
-                        || t_ch.to_lowercase().eq(q_ch.to_lowercase())
-                    {
-                        match_indices.push(t_idx);
-                        q_idx += 1;
-                    }
+            for (t_idx, &(_, ch)) in char_offsets.iter().enumerate() {
+                if q_idx < q_chars.len()
+                    && (ch.eq_ignore_ascii_case(&q_chars[q_idx]) || ch.to_lowercase().eq(q_chars[q_idx].to_lowercase()))
+                {
+                    matches.push(t_idx);
+                    q_idx += 1;
                 }
             }
-
-            // 3. Highlight matched characters in standard ANSI Color::Yellow + BOLD
-            if q_idx == query_chars.len() {
-                let match_style = Style::default()
-                    .fg(Color::Indexed(215))
-                    .add_modifier(Modifier::BOLD);
-                for idx in match_indices {
+            if q_idx == q_chars.len() {
+                let match_style = Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD);
+                for idx in matches {
                     if idx < char_styles.len() {
                         char_styles[idx] = match_style;
                     }
@@ -629,29 +481,18 @@ fn build_highlighted_spans<'a>(
         }
     }
 
-    // 4. Span coalescing (group adjacent characters of identical style into zero-copy slices)
+    // 3. Span coalescing (group adjacent characters of identical style into zero-copy slices)
     let mut out = Vec::new();
     let mut i = 0;
     while i < char_count {
         let style = char_styles[i];
         let mut j = i + 1;
-        while j < char_count && char_styles[j] == style {
-            j += 1;
-        }
-
-        let byte_start = char_offsets[i].0;
-        let byte_end = if j < char_count {
-            char_offsets[j].0
-        } else {
-            cmd.len()
-        };
-
-        if let Some(slice) = cmd.get(byte_start..byte_end) {
-            out.push(Span::styled(slice, style));
-        }
+        while j < char_count && char_styles[j] == style { j += 1; }
+        let b_start = char_offsets[i].0;
+        let b_end = if j < char_count { char_offsets[j].0 } else { cmd.len() };
+        if let Some(slice) = cmd.get(b_start..b_end) { out.push(Span::styled(slice, style)); }
         i = j;
     }
-
     out
 }
 
@@ -666,209 +507,108 @@ pub fn render_frame(
     layout: MasterLayout,
 ) {
     let area = f.area();
-
-    // Degenerate size handling
     if area.width < 20 || area.height < 5 {
-        let msg = Paragraph::new("Terminal too small");
-        f.render_widget(msg, area);
+        f.render_widget(Paragraph::new("Terminal too small"), area);
         return;
     }
 
     // 1. Action Buttons
-    let items = [
-        ("[Esc]", " Exit"),
-        ("[^R]", " Scope"),
-        ("[↵]", " Run"),
-        ("[Tab]", " Edit"),
-    ];
-    let mut header_spans = Vec::new();
-    for (i, (key, desc)) in items.iter().enumerate() {
-        if i > 0 {
-            header_spans.push(Span::raw("   "));
-        }
-        header_spans.push(Span::styled(*key, Style::default().fg(Color::Indexed(241))));
-        header_spans.push(Span::styled(
-            *desc,
-            Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC),
-        ));
-    }
-    f.render_widget(
-        Line::from(header_spans).alignment(Alignment::Center),
-        layout.actions,
-    );
+    let items = [("[Esc]", " Exit"), ("[^R]", " Scope"), ("[↵]", " Run"), ("[Tab]", " Edit")];
+    let header_spans: Vec<Span<'_>> = items.iter().enumerate().flat_map(|(i, (k, d))| {
+        let mut v = Vec::new();
+        if i > 0 { v.push(Span::raw("   ")); }
+        v.push(Span::styled(*k, Style::default().fg(Color::Indexed(241))));
+        v.push(Span::styled(*d, Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC)));
+        v
+    }).collect();
+    f.render_widget(Line::from(header_spans).alignment(Alignment::Center), layout.actions);
 
     // 2. History List
-    let history_focus = if dash.focus == FocusedPanel::History {
-        PanelFocus::Focused
-    } else {
-        PanelFocus::Unfocused
-    };
-    let scope_char = match dash.scope {
-        Scope::Local => "L",
-        Scope::Global => "G",
-    };
-    let scope_spans = bracketed(
-        scope_char,
-        Style::default().fg(Color::Indexed(103)).add_modifier(Modifier::BOLD),
-    );
-
+    let history_focus = if dash.focus == FocusedPanel::History { PanelFocus::Focused } else { PanelFocus::Unfocused };
+    let scope_char = match dash.scope { Scope::Local => "L", Scope::Global => "G" };
     let total = dash.result.indices.len();
-    let current = if total == 0 {
-        0
-    } else {
-        dash.selected.min(total.saturating_sub(1)) + 1
-    };
+    let current = if total == 0 { 0 } else { dash.selected.min(total.saturating_sub(1)) + 1 };
     let count_str = format!("{}/{}", format_thousands(current), format_thousands(total));
-    let count_spans = bracketed(count_str, Style::default().fg(Color::Indexed(241)));
 
     let history_block = create_panel_block(history_focus)
-        .title_top(Line::from(scope_spans).alignment(Alignment::Left))
-        .title_top(Line::from(count_spans).alignment(Alignment::Right));
+        .title_top(Line::from(bracketed(scope_char, Style::default().fg(Color::Indexed(103)).add_modifier(Modifier::BOLD))).alignment(Alignment::Left))
+        .title_top(Line::from(bracketed(count_str, Style::default().fg(Color::Indexed(241)))).alignment(Alignment::Right));
 
-    let history_inner = history_block.inner(layout.history);
-    let history_inner_height = history_inner.height as usize;
-    let history_inner_width = history_inner.width as usize;
-    let mut history_lines = Vec::with_capacity(history_inner_height);
+    let h_inner = history_block.inner(layout.history);
+    let (h_h, h_w) = (h_inner.height as usize, h_inner.width as usize);
+    let sel_bg = match dash.theme { Theme::Dark => Color::Indexed(237), Theme::Light => Color::Gray };
 
-    for row_idx in 0..history_inner_height {
-        // Bottom-up alignment: row_idx = history_inner_height - 1 is the bottom-most line
-        let from_bottom = (history_inner_height.saturating_sub(1)).saturating_sub(row_idx);
+    let history_lines: Vec<Line<'_>> = (0..h_h).map(|row_idx| {
+        let from_bottom = h_h.saturating_sub(1).saturating_sub(row_idx);
         let item_idx = dash.viewport_offset + from_bottom;
-        if item_idx < dash.result.indices.len() {
-            let arena_idx = dash.result.indices[item_idx];
-            let cmd = arena.cmd_str(arena_idx);
-            let is_selected = item_idx == dash.selected;
-
-            let spans_syntax = syntax::tokenize(token_cache, cmd);
-            let mut line_spans = Vec::new();
-
-            // Cursor prefix
-            if is_selected {
-                line_spans.push(Span::styled(
-                    "> ",
-                    Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD),
-                ));
-            } else {
-                line_spans.push(Span::raw("  "));
-            }
-
-            // Command syntax spans: preserved identically without mutating style on selection
-            let mut highlighted = build_highlighted_spans(cmd, spans_syntax, dash.theme, Some(&dash.query));
-            line_spans.append(&mut highlighted);
-
-            // Pad row across the entire inner width of the panel
-            let used_width: usize = 2 + cmd.chars().count();
-            let padding_count = history_inner_width.saturating_sub(used_width);
-            if padding_count > 0 {
-                line_spans.push(Span::raw(" ".repeat(padding_count)));
-            }
-
-            if is_selected {
-                let sel_bg = match dash.theme {
-                    Theme::Dark => Color::Indexed(237),
-                    Theme::Light => Color::Gray,
-                };
-                for span in &mut line_spans {
-                    span.style = span.style.bg(sel_bg);
-                }
-            }
-
-            history_lines.push(Line::from(line_spans));
+        if item_idx >= dash.result.indices.len() { return Line::raw(""); }
+        let cmd = arena.cmd_str(dash.result.indices[item_idx]);
+        let is_selected = item_idx == dash.selected;
+        let mut spans = Vec::new();
+        spans.push(if is_selected {
+            Span::styled("> ", Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD))
         } else {
-            history_lines.push(Line::raw(""));
-        }
-    }
-
-    let history_widget = Paragraph::new(history_lines).block(history_block);
-    f.render_widget(history_widget, layout.history);
+            Span::raw("  ")
+        });
+        spans.extend(build_highlighted_spans(cmd, syntax::tokenize(token_cache, cmd), dash.theme, Some(&dash.query)));
+        let used_width = 2 + cmd.chars().count();
+        if h_w > used_width { spans.push(Span::raw(" ".repeat(h_w - used_width))); }
+        if is_selected { for s in &mut spans { s.style = s.style.bg(sel_bg); } }
+        Line::from(spans)
+    }).collect();
+    f.render_widget(Paragraph::new(history_lines).block(history_block), layout.history);
 
     // 3. Preview Box
-    let preview_focus = if dash.focus == FocusedPanel::Preview {
-        PanelFocus::Focused
-    } else {
-        PanelFocus::Unfocused
-    };
-    let mut preview_lines = Vec::new();
-    let (time_str, path_str) = if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
-        let ts = arena.timestamps[arena_idx as usize];
-        let cwd = arena.cwd_str(arena_idx);
-        (format_timestamp(ts), abbreviate_path(cwd))
-    } else {
-        ("--:--".to_owned(), String::new())
-    };
-
+    let preview_focus = if dash.focus == FocusedPanel::Preview { PanelFocus::Focused } else { PanelFocus::Unfocused };
+    let (time_str, path_str) = dash.result.indices.get(dash.selected).map_or_else(
+        || ("--:--".to_owned(), String::new()),
+        |&idx| (format_timestamp(arena.timestamps[idx as usize]), abbreviate_path(arena.cwd_str(idx))),
+    );
     let meta_style = Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC);
-    let time_spans = bracketed(time_str, meta_style);
-    let path_spans = bracketed(path_str, meta_style);
-
     let mut preview_block = create_panel_block(preview_focus)
-        .title_top(Line::from(time_spans).alignment(Alignment::Left))
-        .title_top(Line::from(path_spans).alignment(Alignment::Right));
+        .title_top(Line::from(bracketed(time_str, meta_style)).alignment(Alignment::Left))
+        .title_top(Line::from(bracketed(path_str, meta_style)).alignment(Alignment::Right));
 
-    if let Some(&arena_idx) = dash.result.indices.get(dash.selected) {
-        let cmd = arena.cmd_str(arena_idx);
-        let preview_spans = syntax::preview(preview_cache, cmd);
-        let raw_spans = build_highlighted_spans(cmd, preview_spans, dash.theme, None);
-        preview_lines = split_spans_into_lines(raw_spans);
-    }
+    let preview_lines = dash.result.indices.get(dash.selected).map_or_else(Vec::new, |&idx| {
+        let cmd = arena.cmd_str(idx);
+        let spans = syntax::preview(preview_cache, cmd);
+        split_spans_into_lines(build_highlighted_spans(cmd, spans, dash.theme, None))
+    });
 
-    let preview_inner = preview_block.inner(layout.preview);
-    let visual_rows: usize = preview_lines
-        .iter()
-        .map(|l| {
-            let w = l.width();
-            if preview_inner.width > 0 && w > preview_inner.width as usize {
-                w.div_ceil(preview_inner.width as usize)
-            } else {
-                1
-            }
-        })
-        .sum();
+    let p_inner = preview_block.inner(layout.preview);
+    let visual_rows: usize = preview_lines.iter().map(|l| {
+        let w = l.width();
+        if p_inner.width > 0 && w > p_inner.width as usize { w.div_ceil(p_inner.width as usize) } else { 1 }
+    }).sum();
 
     #[allow(clippy::cast_possible_truncation)]
-    let max_scroll = (visual_rows as u16).saturating_sub(preview_inner.height);
+    let max_scroll = (visual_rows as u16).saturating_sub(p_inner.height);
     #[allow(clippy::cast_possible_truncation)]
-    let preview_scroll_u16 = (dash.preview_scroll as u16).min(max_scroll);
+    let p_scroll = (dash.preview_scroll as u16).min(max_scroll);
 
-    if visual_rows > preview_inner.height as usize {
-        let scroll_str = format!("{}/{} • Alt+↓/↑ scroll", preview_scroll_u16 + 1, visual_rows);
-        let scroll_spans = bracketed(scroll_str, meta_style);
-        preview_block = preview_block.title_bottom(
-            Line::from(scroll_spans).alignment(Alignment::Right),
-        );
+    if visual_rows > p_inner.height as usize {
+        let scroll_str = format!("{}/{} • Alt+↓/↑ scroll", p_scroll + 1, visual_rows);
+        preview_block = preview_block.title_bottom(Line::from(bracketed(scroll_str, meta_style)).alignment(Alignment::Right));
     }
+    f.render_widget(Paragraph::new(preview_lines).block(preview_block).wrap(Wrap { trim: false }).scroll((p_scroll, 0)), layout.preview);
 
-    let preview_widget = Paragraph::new(preview_lines)
-        .block(preview_block)
-        .wrap(Wrap { trim: false })
-        .scroll((preview_scroll_u16, 0));
-    f.render_widget(preview_widget, layout.preview);
-
-    // 4. Search Query Box (bottom)
-    let query_focus = if dash.focus == FocusedPanel::Query {
-        PanelFocus::Focused
-    } else {
-        PanelFocus::Unfocused
-    };
+    // 4. Search Query Box
+    let query_focus = if dash.focus == FocusedPanel::Query { PanelFocus::Focused } else { PanelFocus::Unfocused };
     let query_block = create_panel_block(query_focus);
-    let query_inner = query_block.inner(layout.query);
-
+    let q_inner = query_block.inner(layout.query);
     let prompt_icon = " ";
-    let query_line = Line::from(vec![
-        Span::styled(prompt_icon, Style::default().fg(Color::Indexed(241))),
-        Span::raw(&dash.query),
-    ]);
-    let query_widget = Paragraph::new(query_line).block(query_block);
-    f.render_widget(query_widget, layout.query);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(prompt_icon, Style::default().fg(Color::Indexed(241))),
+            Span::raw(&dash.query),
+        ])).block(query_block),
+        layout.query,
+    );
 
-    // Position hardware cursor strictly derived from query_inner (never manual magic offsets!)
     #[allow(clippy::cast_possible_truncation)]
-    let prompt_width = prompt_icon.chars().count() as u16;
-    #[allow(clippy::cast_possible_truncation)]
-    let cursor_x = (query_inner.x + prompt_width + dash.cursor as u16)
-        .min(query_inner.x + query_inner.width.saturating_sub(1));
-    let cursor_y = query_inner.y;
-    f.set_cursor_position((cursor_x, cursor_y));
+    let cursor_x = (q_inner.x + prompt_icon.chars().count() as u16 + dash.cursor as u16)
+        .min(q_inner.x + q_inner.width.saturating_sub(1));
+    f.set_cursor_position((cursor_x, q_inner.y));
 }
 
 // ── Public Event Loop ────────────────────────────────────────────
@@ -890,7 +630,6 @@ pub fn run_tui(
 
     let mut token_cache = TokenCache::new();
     let mut preview_cache = PreviewCache::new();
-
     let mut terminal = setup_terminal()?;
 
     let outcome = loop {
@@ -906,167 +645,54 @@ pub fn run_tui(
         }
 
         match crossterm::event::read()? {
-            // --- Query Mutation ---
-            Event::Key(KeyEvent { code: KeyCode::Char(c), modifiers, .. }) => {
-                if modifiers == KeyModifiers::CONTROL {
-                    match c {
-                        'r' => {
-                            dash.focus = FocusedPanel::Query;
-                            dash.toggle_scope();
-                            dash.dedup_total = arena.scope_indices(dash.scope).len();
-                            dash.result = search::search(arena, &dash.query, dash.scope);
-                            dash.selected = 0;
-                            dash.preview_scroll = 0;
-                            dash.dirty = true;
-                        }
-                        'u' => {
-                            dash.focus = FocusedPanel::Query;
-                            dash.delete_to_start();
-                            dash.result = search::search(arena, &dash.query, dash.scope);
-                            dash.selected = 0;
-                            dash.preview_scroll = 0;
-                            dash.dirty = true;
-                        }
-                        'w' => {
-                            dash.focus = FocusedPanel::Query;
-                            dash.delete_word_before();
-                            dash.result = search::search(arena, &dash.query, dash.scope);
-                            dash.selected = 0;
-                            dash.preview_scroll = 0;
-                            dash.dirty = true;
-                        }
-                        'a' => {
-                            dash.focus = FocusedPanel::Query;
-                            dash.move_cursor_home();
-                            dash.dirty = true;
-                        }
-                        'e' => {
-                            dash.focus = FocusedPanel::Query;
-                            dash.move_cursor_end();
-                            dash.dirty = true;
-                        }
-                        'p' => {
-                            dash.focus = FocusedPanel::History;
-                            dash.move_selection(1);
-                            dash.dirty = true;
-                        }
-                        'n' => {
-                            dash.focus = FocusedPanel::History;
-                            dash.move_selection(-1);
-                            dash.dirty = true;
-                        }
-                        'c' | 'd' | 'g' => {
-                            break Outcome::Cancel;
-                        }
-                        _ => {}
-                    }
-                } else if modifiers == KeyModifiers::ALT {
-                    match c {
-                        'j' => {
-                            dash.focus = FocusedPanel::Preview;
-                            dash.scroll_preview(1, 1000);
-                            dash.dirty = true;
-                        }
-                        'k' => {
-                            dash.focus = FocusedPanel::Preview;
-                            dash.scroll_preview(-1, 1000);
-                            dash.dirty = true;
-                        }
-                        _ => {}
-                    }
-                } else {
-                    dash.focus = FocusedPanel::Query;
-                    dash.insert_char(c);
-                    dash.result = search::search(arena, &dash.query, dash.scope);
-                    dash.selected = 0;
-                    dash.preview_scroll = 0;
-                    dash.dirty = true;
+            Event::Key(KeyEvent { code, modifiers, .. }) => match (modifiers, code) {
+                (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => { dash.insert_char(c); dash.on_query_mutated(arena); }
+                (KeyModifiers::NONE, KeyCode::Backspace) => { dash.delete_char_before(); dash.on_query_mutated(arena); }
+                (KeyModifiers::CONTROL, KeyCode::Char('u')) => { dash.delete_to_start(); dash.on_query_mutated(arena); }
+                (KeyModifiers::CONTROL, KeyCode::Char('w')) => { dash.delete_word_before(); dash.on_query_mutated(arena); }
+                (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
+                    dash.toggle_scope();
+                    dash.dedup_total = arena.scope_indices(dash.scope).len();
+                    dash.on_query_mutated(arena);
                 }
-            }
-            Event::Key(KeyEvent { code: KeyCode::Backspace, .. }) => {
-                dash.focus = FocusedPanel::Query;
-                dash.delete_char_before();
-                dash.result = search::search(arena, &dash.query, dash.scope);
-                dash.selected = 0;
-                dash.preview_scroll = 0;
-                dash.dirty = true;
-            }
-            Event::Key(KeyEvent { code: KeyCode::Left, .. }) => {
-                dash.focus = FocusedPanel::Query;
-                dash.move_cursor_left();
-                dash.dirty = true;
-            }
-            Event::Key(KeyEvent { code: KeyCode::Right, .. }) => {
-                dash.focus = FocusedPanel::Query;
-                dash.move_cursor_right();
-                dash.dirty = true;
-            }
-            Event::Key(KeyEvent { code: KeyCode::Home, .. }) => {
-                dash.focus = FocusedPanel::Query;
-                dash.move_cursor_home();
-                dash.dirty = true;
-            }
-            Event::Key(KeyEvent { code: KeyCode::End, .. }) => {
-                dash.focus = FocusedPanel::Query;
-                dash.move_cursor_end();
-                dash.dirty = true;
-            }
+                (KeyModifiers::CONTROL, KeyCode::Char('a')) | (KeyModifiers::NONE, KeyCode::Home) => { dash.focus = FocusedPanel::Query; dash.move_cursor_home(); dash.dirty = true; }
+                (KeyModifiers::CONTROL, KeyCode::Char('e')) | (KeyModifiers::NONE, KeyCode::End) => { dash.focus = FocusedPanel::Query; dash.move_cursor_end(); dash.dirty = true; }
+                (KeyModifiers::NONE, KeyCode::Left) => { dash.focus = FocusedPanel::Query; dash.move_cursor_left(); dash.dirty = true; }
+                (KeyModifiers::NONE, KeyCode::Right) => { dash.focus = FocusedPanel::Query; dash.move_cursor_right(); dash.dirty = true; }
+                (KeyModifiers::CONTROL, KeyCode::Char('p')) | (KeyModifiers::NONE, KeyCode::Up) => { dash.focus = FocusedPanel::History; dash.move_selection(1); dash.dirty = true; }
+                (KeyModifiers::CONTROL, KeyCode::Char('n')) | (KeyModifiers::NONE, KeyCode::Down) => { dash.focus = FocusedPanel::History; dash.move_selection(-1); dash.dirty = true; }
+                (KeyModifiers::NONE, KeyCode::PageUp) => { dash.focus = FocusedPanel::History; dash.move_selection(10); dash.dirty = true; }
+                (KeyModifiers::NONE, KeyCode::PageDown) => { dash.focus = FocusedPanel::History; dash.move_selection(-10); dash.dirty = true; }
+                (KeyModifiers::ALT, KeyCode::Up | KeyCode::Char('k')) => { dash.focus = FocusedPanel::Preview; dash.scroll_preview(-1, 1000); dash.dirty = true; }
+                (KeyModifiers::ALT, KeyCode::Down | KeyCode::Char('j')) => { dash.focus = FocusedPanel::Preview; dash.scroll_preview(1, 1000); dash.dirty = true; }
+                (KeyModifiers::CONTROL, KeyCode::Char('c' | 'd' | 'g')) | (KeyModifiers::NONE, KeyCode::Esc) => break Outcome::Cancel,
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    let cmd = dash.selected_command(arena).or_else(|| {
+                        let q = dash.query.trim();
+                        (!q.is_empty()).then(|| dash.query.clone())
+                    });
+                    break cmd.map_or(Outcome::Cancel, Outcome::Execute);
+                }
+                (KeyModifiers::NONE, KeyCode::Tab) => {
+                    let cmd = dash.selected_command(arena).unwrap_or_else(|| dash.query.clone());
+                    break if cmd.trim().is_empty() { Outcome::Cancel } else { Outcome::Edit(cmd) };
+                }
+                _ => {}
+            },
 
-            // --- Navigation ---
-            Event::Key(KeyEvent { code: KeyCode::Up, modifiers, .. }) => {
-                if modifiers == KeyModifiers::ALT {
-                    dash.focus = FocusedPanel::Preview;
-                    dash.scroll_preview(-1, 1000);
-                } else {
-                    dash.focus = FocusedPanel::History;
-                    dash.move_selection(1);
-                }
-                dash.dirty = true;
-            }
-            Event::Key(KeyEvent { code: KeyCode::Down, modifiers, .. }) => {
-                if modifiers == KeyModifiers::ALT {
-                    dash.focus = FocusedPanel::Preview;
-                    dash.scroll_preview(1, 1000);
-                } else {
-                    dash.focus = FocusedPanel::History;
-                    dash.move_selection(-1);
-                }
-                dash.dirty = true;
-            }
-            Event::Key(KeyEvent { code: KeyCode::PageUp, .. }) => {
-                dash.focus = FocusedPanel::History;
-                dash.move_selection(10);
-                dash.dirty = true;
-            }
-            Event::Key(KeyEvent { code: KeyCode::PageDown, .. }) => {
-                dash.focus = FocusedPanel::History;
-                dash.move_selection(-10);
-                dash.dirty = true;
-            }
-
-            // --- Mouse scroll & click support ---
             Event::Mouse(mouse) => {
                 let layout = compute_master_layout(Rect::new(0, 0, dash.width, dash.height));
                 let is_over_preview = in_rect(mouse.column, mouse.row, layout.preview);
 
                 match mouse.kind {
-                    MouseEventKind::ScrollUp => {
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                        let delta = if mouse.kind == MouseEventKind::ScrollUp { 1 } else { -1 };
                         if is_over_preview {
                             dash.focus = FocusedPanel::Preview;
-                            dash.scroll_preview(-1, 1000);
+                            dash.scroll_preview(-delta, 1000);
                         } else {
                             dash.focus = FocusedPanel::History;
-                            dash.move_selection(1);
-                        }
-                        dash.dirty = true;
-                    }
-                    MouseEventKind::ScrollDown => {
-                        if is_over_preview {
-                            dash.focus = FocusedPanel::Preview;
-                            dash.scroll_preview(1, 1000);
-                        } else {
-                            dash.focus = FocusedPanel::History;
-                            dash.move_selection(-1);
+                            dash.move_selection(delta);
                         }
                         dash.dirty = true;
                     }
@@ -1096,29 +722,6 @@ pub fn run_tui(
                 }
             }
 
-            // --- Terminal Actions ---
-            Event::Key(KeyEvent { code: KeyCode::Enter, .. }) => {
-                if let Some(cmd) = dash.selected_command(arena) {
-                    break Outcome::Execute(cmd);
-                } else if !dash.query.trim().is_empty() {
-                    break Outcome::Execute(dash.query.clone());
-                }
-                break Outcome::Cancel;
-            }
-            Event::Key(KeyEvent { code: KeyCode::Tab, .. }) => {
-                let cmd = dash
-                    .selected_command(arena)
-                    .unwrap_or_else(|| dash.query.clone());
-                if !cmd.trim().is_empty() {
-                    break Outcome::Edit(cmd);
-                }
-                break Outcome::Cancel;
-            }
-            Event::Key(KeyEvent { code: KeyCode::Esc, .. }) => {
-                break Outcome::Cancel;
-            }
-
-            // --- Window Resize ---
             Event::Resize(w, h) => {
                 dash.resize(w, h);
                 dash.dirty = true;

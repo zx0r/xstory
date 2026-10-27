@@ -32,18 +32,16 @@ pub enum QueryMode<'a> {
 
 #[allow(clippy::option_if_let_else)]
 fn parse_query(q: &str) -> QueryMode<'_> {
-    let trimmed = q.trim();
-    if trimmed.is_empty() {
-        return QueryMode::Empty;
-    }
-    if let Some(rest) = trimmed.strip_prefix('^') {
-        if rest.is_empty() { QueryMode::Empty } else { QueryMode::Prefix(rest) }
-    } else if let Some(rest) = trimmed.strip_prefix('\'') {
-        if rest.is_empty() { QueryMode::Empty } else { QueryMode::Substring(rest) }
-    } else if let Some(rest) = trimmed.strip_suffix('$') {
-        if rest.is_empty() { QueryMode::Empty } else { QueryMode::Suffix(rest) }
+    let t = q.trim();
+    if t.is_empty() { return QueryMode::Empty; }
+    if let Some(r) = t.strip_prefix('^') {
+        if r.is_empty() { QueryMode::Empty } else { QueryMode::Prefix(r) }
+    } else if let Some(r) = t.strip_prefix('\'') {
+        if r.is_empty() { QueryMode::Empty } else { QueryMode::Substring(r) }
+    } else if let Some(r) = t.strip_suffix('$') {
+        if r.is_empty() { QueryMode::Empty } else { QueryMode::Suffix(r) }
     } else {
-        QueryMode::Fuzzy(trimmed)
+        QueryMode::Fuzzy(t)
     }
 }
 
@@ -130,7 +128,31 @@ fn heap_to_sorted(heap: BinaryHeap<Scored>) -> Vec<u32> {
     items.iter().map(|s| s.idx).collect()
 }
 
-// ── Single-threaded Search ───────────────────────────────────────
+// ── Search Chunk Engine ──────────────────────────────────────────
+
+fn search_chunk(
+    arena: &Arena,
+    indices: &[u32],
+    mode: QueryMode<'_>,
+    query_mask: u64,
+) -> BinaryHeap<Scored> {
+    let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+    let mut needle_buf = Vec::new();
+    let mut haystack_buf = Vec::new();
+    let mut heap = BinaryHeap::with_capacity(TOP_K + 1);
+
+    for &idx in indices {
+        if query_mask == 0 || (arena.masks[idx as usize] & query_mask) == query_mask {
+            let cmd = arena.cmd_str(idx);
+            if let Some(score) = match_candidate(&mut matcher, mode, cmd, &mut needle_buf, &mut haystack_buf) {
+                heap_push(&mut heap, Scored { score, idx }, TOP_K);
+            }
+        }
+    }
+    heap
+}
+
+// ── Search Execution (Sequential / Parallel) ─────────────────────
 
 #[allow(clippy::cast_possible_truncation)]
 fn search_sequential(
@@ -139,31 +161,12 @@ fn search_sequential(
     mode: QueryMode<'_>,
     query_mask: u64,
 ) -> SearchResult {
-    let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
-    let mut needle_buf = Vec::new();
-    let mut haystack_buf = Vec::new();
-    let mut heap = BinaryHeap::with_capacity(TOP_K + 1);
-
-    for &idx in indices {
-        // Bitmask fast-reject
-        if query_mask != 0 && (arena.masks[idx as usize] & query_mask) != query_mask {
-            continue;
-        }
-
-        let cmd = arena.cmd_str(idx);
-        if let Some(score) = match_candidate(&mut matcher, mode, cmd, &mut needle_buf, &mut haystack_buf) {
-            heap_push(&mut heap, Scored { score, idx }, TOP_K);
-        }
-    }
-
-    let total = indices.len() as u32;
+    let heap = search_chunk(arena, indices, mode, query_mask);
     SearchResult {
         indices: heap_to_sorted(heap),
-        total,
+        total: indices.len() as u32,
     }
 }
-
-// ── Parallel Search ──────────────────────────────────────────────
 
 #[allow(clippy::cast_possible_truncation)]
 fn search_parallel(
@@ -176,26 +179,9 @@ fn search_parallel(
 
     let local_heaps: Vec<BinaryHeap<Scored>> = indices
         .par_chunks(CHUNK_SIZE)
-        .map(|chunk| {
-            let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
-            let mut needle_buf = Vec::new();
-            let mut haystack_buf = Vec::new();
-            let mut heap = BinaryHeap::with_capacity(TOP_K + 1);
-
-            for &idx in chunk {
-                if query_mask != 0 && (arena.masks[idx as usize] & query_mask) != query_mask {
-                    continue;
-                }
-                let cmd = arena.cmd_str(idx);
-                if let Some(score) = match_candidate(&mut matcher, mode, cmd, &mut needle_buf, &mut haystack_buf) {
-                    heap_push(&mut heap, Scored { score, idx }, TOP_K);
-                }
-            }
-            heap
-        })
+        .map(|chunk| search_chunk(arena, chunk, mode, query_mask))
         .collect();
 
-    // Merge all local heaps into final
     let mut final_heap = BinaryHeap::with_capacity(TOP_K + 1);
     for local in local_heaps {
         for item in local {
@@ -203,10 +189,9 @@ fn search_parallel(
         }
     }
 
-    let total = indices.len() as u32;
     SearchResult {
         indices: heap_to_sorted(final_heap),
-        total,
+        total: indices.len() as u32,
     }
 }
 
@@ -218,19 +203,12 @@ fn search_parallel(
 #[allow(clippy::cast_possible_truncation)]
 pub fn search(arena: &Arena, query: &str, scope: Scope) -> SearchResult {
     let indices = arena.scope_indices(scope);
-    if indices.is_empty() {
-        return SearchResult::empty();
-    }
-
+    if indices.is_empty() { return SearchResult::empty(); }
     let mode = parse_query(query);
 
-    // Empty query → return first K indices in reverse chrono (already sorted)
     if matches!(mode, QueryMode::Empty) {
         let n = indices.len().min(TOP_K);
-        return SearchResult {
-            indices: indices[..n].to_vec(),
-            total: indices.len() as u32,
-        };
+        return SearchResult { indices: indices[..n].to_vec(), total: indices.len() as u32 };
     }
 
     let query_bytes = match mode {
@@ -238,7 +216,6 @@ pub fn search(arena: &Arena, query: &str, scope: Scope) -> SearchResult {
         QueryMode::Empty => unreachable!(),
     };
     let query_mask = char_mask(query_bytes);
-
     if indices.len() < PAR_THRESHOLD {
         search_sequential(arena, indices, mode, query_mask)
     } else {

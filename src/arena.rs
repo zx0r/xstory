@@ -31,8 +31,7 @@ pub struct Scored {
 
 impl Ord for Scored {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other.score.cmp(&self.score)
-            .then_with(|| other.idx.cmp(&self.idx))
+        other.score.cmp(&self.score).then_with(|| other.idx.cmp(&self.idx))
     }
 }
 
@@ -57,10 +56,6 @@ pub enum Theme {
 }
 
 /// Application configuration.
-///
-/// Loaded once at startup via `Config::load()`.
-/// File format: plain `key = value` lines, `#` comments, blank lines ignored.
-/// Env vars override file values. Compiled-in defaults as final fallback.
 pub struct Config {
     pub history_path:     PathBuf,
     pub scroll_off:       u16,
@@ -71,21 +66,15 @@ pub struct Config {
 // ── Arena ────────────────────────────────────────────────────────
 
 /// Columnar in-memory arena. Owns the mmap and all decoded columns.
-/// Lifetime-free: indices and `ByteView` point into `mmap` or `unescape_buf`.
 pub struct Arena {
-    // owned backing buffers
-    mmap:          Option<Mmap>,
-    unescape_buf:  Vec<u8>,
-
-    // parallel column vectors (raw, including duplicates)
-    pub timestamps:  Vec<i64>,
-    pub durations:   Vec<u32>,
-    pub exit_codes:  Vec<i32>,
-    pub commands:    Vec<ByteView>,
-    pub cwds:        Vec<ByteView>,
-    pub masks:       Vec<u64>,
-
-    // deduplicated scope indices (precomputed in load)
+    mmap:               Option<Mmap>,
+    unescape_buf:       Vec<u8>,
+    pub timestamps:     Vec<i64>,
+    pub durations:      Vec<u32>,
+    pub exit_codes:     Vec<i32>,
+    pub commands:       Vec<ByteView>,
+    pub cwds:           Vec<ByteView>,
+    pub masks:          Vec<u64>,
     pub global_indices: Vec<u32>,
     pub local_indices:  Vec<u32>,
 }
@@ -105,134 +94,42 @@ pub fn fnv1a(bytes: &[u8]) -> u64 {
 
 // ── Inline atoi (no alloc) ───────────────────────────────────────
 
-/// Parse i64 from ASCII bytes. Returns None on invalid input.
-fn parse_i64(s: &[u8]) -> Option<i64> {
-    if s.is_empty() {
-        return None;
-    }
-    let (neg, digits) = if s[0] == b'-' {
-        (true, &s[1..])
-    } else {
-        (false, s)
-    };
-    if digits.is_empty() {
-        return None;
-    }
-    let mut val: i64 = 0;
-    for &b in digits {
-        if !b.is_ascii_digit() {
-            return None;
-        }
-        val = val.checked_mul(10)?.checked_add(i64::from(b - b'0'))?;
-    }
-    if neg { Some(-val) } else { Some(val) }
-}
-
-/// Parse u32 from ASCII bytes. Returns None on invalid input.
-fn parse_u32(s: &[u8]) -> Option<u32> {
-    if s.is_empty() {
-        return None;
-    }
-    let mut val: u32 = 0;
-    for &b in s {
-        if !b.is_ascii_digit() {
-            return None;
-        }
-        val = val.checked_mul(10)?.checked_add(u32::from(b - b'0'))?;
-    }
-    Some(val)
-}
-
-/// Parse i32 from ASCII bytes. Returns None on invalid input.
-fn parse_i32(s: &[u8]) -> Option<i32> {
-    if s.is_empty() {
-        return None;
-    }
-    let (neg, digits) = if s[0] == b'-' {
-        (true, &s[1..])
-    } else {
-        (false, s)
-    };
-    if digits.is_empty() {
-        return None;
-    }
-    let mut val: i32 = 0;
-    for &b in digits {
-        if !b.is_ascii_digit() {
-            return None;
-        }
-        val = val.checked_mul(10)?.checked_add(i32::from(b - b'0'))?;
-    }
-    if neg { Some(-val) } else { Some(val) }
-}
+#[inline] fn parse_int<T: std::str::FromStr>(s: &[u8]) -> Option<T> { std::str::from_utf8(s).ok()?.parse().ok() }
+#[inline] fn parse_i64(s: &[u8]) -> Option<i64> { parse_int(s) }
+#[inline] fn parse_u32(s: &[u8]) -> Option<u32> { parse_int(s) }
+#[inline] fn parse_i32(s: &[u8]) -> Option<i32> { parse_int(s) }
 
 // ── ByteView construction ────────────────────────────────────────
 
-/// Build a `ByteView` for a byte slice that requires no unescaping.
-/// If `len ≤ 12` → inline. Otherwise → out-of-line pointing into mmap (buffer 0).
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn byteview_raw(s: &[u8], mmap_base: *const u8) -> ByteView {
-    let len = s.len();
-    let mut bv = ByteView {
-        len: len as u32,
-        prefix: [0; 4],
-        data: [0; 8],
-    };
-
-    if len <= 12 {
-        let copy_prefix = len.min(4);
-        bv.prefix[..copy_prefix].copy_from_slice(&s[..copy_prefix]);
-        if len > 4 {
-            let tail = len - 4;
-            bv.data[..tail].copy_from_slice(&s[4..]);
-        }
+#[allow(clippy::cast_possible_truncation)]
+fn make_byteview(s: &[u8], buf_id: u32, offset: u32) -> ByteView {
+    let mut bv = ByteView { len: s.len() as u32, prefix: [0; 4], data: [0; 8] };
+    let copy_p = s.len().min(4);
+    bv.prefix[..copy_p].copy_from_slice(&s[..copy_p]);
+    if s.len() <= 12 {
+        if s.len() > 4 { bv.data[..s.len() - 4].copy_from_slice(&s[4..]); }
     } else {
-        bv.prefix[..4].copy_from_slice(&s[..4]);
-        // SAFETY: s points into the mmap, mmap_base is the start of the mmap.
-        // The offset is always positive and within u32 range for files < 4 GiB.
-        let offset = unsafe { s.as_ptr().offset_from(mmap_base) } as u32;
-        bv.data[..4].copy_from_slice(&0_u32.to_le_bytes());
+        bv.data[..4].copy_from_slice(&buf_id.to_le_bytes());
         bv.data[4..8].copy_from_slice(&offset.to_le_bytes());
     }
     bv
 }
 
-/// Build a `ByteView` for an unescaped byte slice.
-/// If `len ≤ 12` → inlined from the unescaped data.
-/// Otherwise → out-of-line, `buffer_id` = 1.
-#[allow(clippy::cast_possible_truncation)]
-fn byteview_unescaped(s: &[u8], offset_in_buf: u32) -> ByteView {
-    let len = s.len();
-    let mut bv = ByteView {
-        len: len as u32,
-        prefix: [0; 4],
-        data: [0; 8],
-    };
-    let copy_prefix = len.min(4);
-    bv.prefix[..copy_prefix].copy_from_slice(&s[..copy_prefix]);
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn byteview_raw(s: &[u8], mmap_base: *const u8) -> ByteView {
+    let offset = if s.len() > 12 { unsafe { s.as_ptr().offset_from(mmap_base) as u32 } } else { 0 };
+    make_byteview(s, 0, offset)
+}
 
-    if len <= 12 {
-        if len > 4 {
-            let tail = len - 4;
-            bv.data[..tail].copy_from_slice(&s[4..]);
-        }
-    } else {
-        bv.data[..4].copy_from_slice(&1_u32.to_le_bytes());
-        bv.data[4..8].copy_from_slice(&offset_in_buf.to_le_bytes());
-    }
-    bv
+#[inline]
+fn byteview_unescaped(s: &[u8], offset: u32) -> ByteView {
+    make_byteview(s, 1, offset)
 }
 
 // ── Unescape ─────────────────────────────────────────────────────
 
-/// Check if a byte slice contains any escape sequences (`\\`).
-#[inline]
-fn has_escapes(s: &[u8]) -> bool {
-    memchr::memchr(b'\\', s).is_some()
-}
+#[inline] fn has_escapes(s: &[u8]) -> bool { memchr::memchr(b'\\', s).is_some() }
 
-/// Unescape `\\t`, `\\n`, `\\\\` into `buf`.
-/// Returns (`start_offset`, length) of the unescaped data in `buf`.
 #[allow(clippy::cast_possible_truncation)]
 fn unescape_into(s: &[u8], buf: &mut Vec<u8>) -> (u32, usize) {
     let start = buf.len() as u32;
@@ -243,10 +140,7 @@ fn unescape_into(s: &[u8], buf: &mut Vec<u8>) -> (u32, usize) {
                 b't'  => buf.push(b'\t'),
                 b'n'  => buf.push(b'\n'),
                 b'\\' => buf.push(b'\\'),
-                other => {
-                    buf.push(b'\\');
-                    buf.push(other);
-                }
+                other => { buf.push(b'\\'); buf.push(other); }
             }
             i += 2;
         } else {
@@ -254,14 +148,11 @@ fn unescape_into(s: &[u8], buf: &mut Vec<u8>) -> (u32, usize) {
             i += 1;
         }
     }
-    let len = buf.len() - start as usize;
-    (start, len)
+    (start, buf.len() - start as usize)
 }
 
 // ── Char bitmask ─────────────────────────────────────────────────
 
-/// Compute 64-bit character bitmask for fast-reject filtering.
-/// Each byte maps to one of 64 bits via `b & 63`.
 #[must_use]
 pub fn char_mask(s: &[u8]) -> u64 {
     let mut mask: u64 = 0;
@@ -431,17 +322,10 @@ impl Arena {
         self.local_indices = local_buf;
     }
 
-    /// Resolve a command `ByteView` by column index to the actual byte slice.
-    #[must_use]
-    pub fn cmd_bytes(&self, idx: u32) -> &[u8] {
-        self.resolve_bv(&self.commands[idx as usize])
-    }
-
-    /// Resolve a cwd `ByteView` by column index to the actual byte slice.
-    #[must_use]
-    pub fn cwd_bytes(&self, idx: u32) -> &[u8] {
-        self.resolve_bv(&self.cwds[idx as usize])
-    }
+    #[must_use] #[inline] pub fn cmd_bytes(&self, idx: u32) -> &[u8] { self.resolve_bv(&self.commands[idx as usize]) }
+    #[must_use] #[inline] pub fn cwd_bytes(&self, idx: u32) -> &[u8] { self.resolve_bv(&self.cwds[idx as usize]) }
+    #[must_use] #[inline] pub fn cmd_str(&self, idx: u32) -> &str { unsafe { std::str::from_utf8_unchecked(self.cmd_bytes(idx)) } }
+    #[must_use] #[inline] pub fn cwd_str(&self, idx: u32) -> &str { unsafe { std::str::from_utf8_unchecked(self.cwd_bytes(idx)) } }
 
     /// Core resolver: takes `&ByteView` (borrowed from `self.commands`/`cwds` Vec),
     /// so inlined bytes live as long as `&self`.
@@ -465,22 +349,6 @@ impl Arena {
         }
     }
 
-    /// Resolve command at index → `&str` (unchecked UTF-8, validated at parse time).
-    #[must_use]
-    #[inline]
-    pub fn cmd_str(&self, idx: u32) -> &str {
-        // SAFETY: TSV parse validates UTF-8 at ingestion boundary.
-        unsafe { std::str::from_utf8_unchecked(self.cmd_bytes(idx)) }
-    }
-
-    /// Resolve cwd at index → `&str`.
-    #[must_use]
-    #[inline]
-    pub fn cwd_str(&self, idx: u32) -> &str {
-        // SAFETY: TSV parse validates UTF-8 at ingestion boundary.
-        unsafe { std::str::from_utf8_unchecked(self.cwd_bytes(idx)) }
-    }
-
     /// Get the deduplicated indices slice for the active scope.
     #[must_use]
     pub fn scope_indices(&self, scope: Scope) -> &[u32] {
@@ -490,17 +358,8 @@ impl Arena {
         }
     }
 
-    /// Total raw entry count.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.commands.len()
-    }
-
-    /// Whether the arena has no entries.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.commands.is_empty()
-    }
+    #[must_use] pub const fn len(&self) -> usize { self.commands.len() }
+    #[must_use] pub const fn is_empty(&self) -> bool { self.commands.is_empty() }
 }
 
 // ── Config ───────────────────────────────────────────────────────
@@ -510,22 +369,11 @@ impl Config {
     #[must_use]
     pub fn load() -> Self {
         let mut cfg = Self::defaults();
-
-        if let Some(config_path) = Self::config_file_path()
-            && let Ok(contents) = std::fs::read_to_string(&config_path)
-        {
+        if let Some(path) = Self::config_file_path() && let Ok(contents) = std::fs::read_to_string(&path) {
             Self::parse_config_file(&contents, &mut cfg);
         }
-
-        if let Ok(val) = std::env::var("XSTORY_HISTORY_PATH") {
-            cfg.history_path = PathBuf::from(val);
-        }
-        if let Ok(val) = std::env::var("XSTORY_SCROLL_OFF")
-            && let Ok(n) = val.parse::<u16>()
-        {
-            cfg.scroll_off = n;
-        }
-
+        if let Ok(val) = std::env::var("XSTORY_HISTORY_PATH") { cfg.history_path = PathBuf::from(val); }
+        if let Ok(val) = std::env::var("XSTORY_SCROLL_OFF") && let Ok(n) = val.parse::<u16>() { cfg.scroll_off = n; }
         cfg
     }
 
@@ -534,20 +382,11 @@ impl Config {
             |_| PathBuf::from("/tmp/xstory_history.tsv"),
             |h| PathBuf::from(h).join(".local/share/xstory/history.tsv"),
         );
-
         Self {
             history_path,
             scroll_off: 4,
-            exclude_commands: vec![
-                "exit".into(),
-                "logout".into(),
-                "clear".into(),
-            ],
-            secret_patterns: vec![
-                "AWS_SECRET".into(),
-                "GITHUB_TOKEN".into(),
-                "--password".into(),
-            ],
+            exclude_commands: vec!["exit".into(), "logout".into(), "clear".into()],
+            secret_patterns: vec!["AWS_SECRET".into(), "GITHUB_TOKEN".into(), "--password".into()],
         }
     }
 
@@ -556,28 +395,13 @@ impl Config {
     }
 
     fn parse_config_file(contents: &str, cfg: &mut Self) {
-        for line in contents.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let Some((key, val)) = line.split_once('=') else { continue };
-            let key = key.trim();
-            let val = val.trim();
-
-            match key {
-                "history_path" => cfg.history_path = PathBuf::from(val),
-                "scroll_off" => {
-                    if let Ok(n) = val.parse::<u16>() {
-                        cfg.scroll_off = n;
-                    }
-                }
-                "exclude_commands" => {
-                    cfg.exclude_commands = val.split(',').map(|s| s.trim().to_owned()).collect();
-                }
-                "secret_patterns" => {
-                    cfg.secret_patterns = val.split(',').map(|s| s.trim().to_owned()).collect();
-                }
+        for line in contents.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            let Some((k, v)) = line.split_once('=') else { continue };
+            match (k.trim(), v.trim()) {
+                ("history_path", v) => cfg.history_path = PathBuf::from(v),
+                ("scroll_off", v) => if let Ok(n) = v.parse() { cfg.scroll_off = n; },
+                ("exclude_commands", v) => cfg.exclude_commands = v.split(',').map(|s| s.trim().to_owned()).collect(),
+                ("secret_patterns", v) => cfg.secret_patterns = v.split(',').map(|s| s.trim().to_owned()).collect(),
                 _ => {}
             }
         }

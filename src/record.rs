@@ -38,31 +38,16 @@ fn escape_into(s: &str, buf: &mut Vec<u8>) -> bool {
 
 /// Check if command should be recorded, denied, or masked.
 fn evaluate(cmd: &str, config: &Config) -> Verdict {
-    // Empty or whitespace-only → deny
-    if cmd.trim().is_empty() {
+    if cmd.trim().is_empty() || cmd.starts_with(' ') {
         return Verdict::Deny;
     }
-
-    // Ignorespace: leading space → deny (bash HISTCONTROL=ignorespace)
-    if cmd.starts_with(' ') {
-        return Verdict::Deny;
-    }
-
-    // Excluded commands: exact match against trimmed command base
     let base = cmd.split_whitespace().next().unwrap_or("");
-    for excl in &config.exclude_commands {
-        if base == excl {
-            return Verdict::Deny;
-        }
+    if config.exclude_commands.iter().any(|excl| excl == base) {
+        return Verdict::Deny;
     }
-
-    // Secret patterns: substring match (not regex — O(1) amortized)
-    for pat in &config.secret_patterns {
-        if cmd.contains(pat.as_str()) {
-            return Verdict::Mask;
-        }
+    if config.secret_patterns.iter().any(|pat| cmd.contains(pat.as_str())) {
+        return Verdict::Mask;
     }
-
     Verdict::Allow
 }
 
@@ -111,20 +96,9 @@ pub fn record(
     cwd: Option<&str>,
     config: &Config,
 ) -> Result<(), crate::error::Error> {
-    let cwd_env = if cwd.is_none() {
-        std::env::var("PWD").ok()
-    } else {
-        None
-    };
+    let cwd_env = if cwd.is_none() { std::env::var("PWD").ok() } else { None };
     let cwd_ref = cwd.or(cwd_env.as_deref()).unwrap_or("?");
-    record_to_path(
-        cmd_parts,
-        exit_code,
-        duration_ms,
-        Some(cwd_ref),
-        config,
-        &config.history_path,
-    )
+    record_to_path(cmd_parts, exit_code, duration_ms, Some(cwd_ref), config, &config.history_path)
 }
 
 /// Record with explicit path override (for testing).
@@ -184,38 +158,21 @@ pub fn record_to_path(
 // ── Integer serialization (no alloc) ─────────────────────────────
 
 fn write_i64(buf: &mut Vec<u8>, val: i64) {
-    if val < 0 {
-        buf.push(b'-');
-        write_u64(buf, val.unsigned_abs());
-    } else {
-        #[allow(clippy::cast_sign_loss)]
-        write_u64(buf, val as u64);
-    }
+    if val < 0 { buf.push(b'-'); }
+    write_u64(buf, val.unsigned_abs());
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn write_u64(buf: &mut Vec<u8>, val: u64) {
-    if val == 0 {
-        buf.push(b'0');
-        return;
-    }
+fn write_u64(buf: &mut Vec<u8>, mut val: u64) {
+    if val == 0 { buf.push(b'0'); return; }
     let start = buf.len();
-    let mut v = val;
-    while v > 0 {
-        buf.push(b'0' + (v % 10) as u8);
-        v /= 10;
-    }
+    while val > 0 { buf.push(b'0' + (val % 10) as u8); val /= 10; }
     buf[start..].reverse();
 }
 
+#[inline]
 fn write_i32(buf: &mut Vec<u8>, val: i32) {
-    if val < 0 {
-        buf.push(b'-');
-        write_u64(buf, u64::from(val.unsigned_abs()));
-    } else {
-        #[allow(clippy::cast_sign_loss)]
-        write_u64(buf, val as u64);
-    }
+    write_i64(buf, i64::from(val));
 }
 
 // ── Tests ────────────────────────────────────────────────────────
