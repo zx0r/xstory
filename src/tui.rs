@@ -808,7 +808,8 @@ pub fn render_frame(
     f.render_widget(Paragraph::new(line).block(query_block), layout.query);
 
     #[allow(clippy::cast_possible_truncation)]
-    let cursor_x = (q_inner.x + dash.cursor as u16)
+    let cursor_offset = if dash.query.is_empty() { 1 } else { dash.cursor as u16 };
+    let cursor_x = (q_inner.x + cursor_offset)
         .min(q_inner.x + q_inner.width.saturating_sub(1));
     f.set_cursor_position((cursor_x, q_inner.y));
 }
@@ -1386,7 +1387,7 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
 
-        // 1. When query is empty: prompt icon '' is displayed at q_inner.x, cursor is at q_inner.x
+        // 1. When query is empty: prompt icon '' is displayed at q_inner.x, cursor is to the right at q_inner.x + 1
         terminal
             .draw(|f| {
                 render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache, layout);
@@ -1401,7 +1402,7 @@ mod tests {
             "When query is empty, magnifying glass icon must be rendered"
         );
         let cursor_pos = terminal.get_cursor_position().expect("cursor pos");
-        assert_eq!(cursor_pos.x, q_inner.x);
+        assert_eq!(cursor_pos.x, q_inner.x + 1);
         assert_eq!(cursor_pos.y, q_inner.y);
 
         // 2. When query has input: icon disappears, text starts directly at q_inner.x (no extra spaces!)

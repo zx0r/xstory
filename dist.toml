@@ -1,34 +1,22 @@
 # Config version
-cargo-dist-version = "0.22.0" # Указывайте актуальную версию инструмента
+cargo-dist-version = "0.32.0"
 
-# Биннарные пакеты для сборки
 binaries = ["xstory"]
 
-# Целевые платформы (Targets) для кросс-компиляции релизов
 targets = [
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "x86_64-apple-darwin",
-    "aarch64-apple-darwin",
-    "x86_64-pc-windows-msvc"
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
 ]
 
-# Создаваемые инсталляторы (скрипты быстрой установки в стиле curl | sh)
-installers = [
-    "shell",
-    "powershell"
-]
+installers = ["shell", "powershell"]
 
-# Форматы архивов для различных ОС
-archives = [
-    "tar.xz",
-    "zip"
-]
+archives = ["tar.xz", "zip"]
 
-# Генерация CI (GitHub Actions)
 ci = ["github"]
 
-# Публикация в GitHub Releases
 publish-jobs = ["github-releases"]
 
 [github-releases]
