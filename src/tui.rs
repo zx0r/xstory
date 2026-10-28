@@ -1039,26 +1039,10 @@ pub fn run_tui(
                     dash.delete_to_start();
                     dash.on_query_mutated(arena);
                 }
-                (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
-                    dash.delete_word_before();
-                    dash.on_query_mutated(arena);
-                }
                 (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
                     dash.toggle_scope();
                     dash.dedup_total = arena.scope_indices(dash.scope).len();
                     dash.on_query_mutated(arena);
-                }
-                (KeyModifiers::CONTROL, KeyCode::Char('a'))
-                | (KeyModifiers::NONE, KeyCode::Home) => {
-                    dash.focus = FocusedPanel::Query;
-                    dash.move_cursor_home();
-                    dash.dirty = true;
-                }
-                (KeyModifiers::CONTROL, KeyCode::Char('e'))
-                | (KeyModifiers::NONE, KeyCode::End) => {
-                    dash.focus = FocusedPanel::Query;
-                    dash.move_cursor_end();
-                    dash.dirty = true;
                 }
                 (KeyModifiers::NONE, KeyCode::Left) => {
                     dash.focus = FocusedPanel::Query;
@@ -1070,25 +1054,14 @@ pub fn run_tui(
                     dash.move_cursor_right();
                     dash.dirty = true;
                 }
-                (KeyModifiers::CONTROL, KeyCode::Char('p')) | (KeyModifiers::NONE, KeyCode::Up) => {
+                (KeyModifiers::NONE, KeyCode::Up) => {
                     dash.focus = FocusedPanel::History;
                     dash.move_selection(1);
                     dash.dirty = true;
                 }
-                (KeyModifiers::CONTROL, KeyCode::Char('n'))
-                | (KeyModifiers::NONE, KeyCode::Down) => {
+                (KeyModifiers::NONE, KeyCode::Down) => {
                     dash.focus = FocusedPanel::History;
                     dash.move_selection(-1);
-                    dash.dirty = true;
-                }
-                (KeyModifiers::NONE, KeyCode::PageUp) => {
-                    dash.focus = FocusedPanel::History;
-                    dash.move_selection(10);
-                    dash.dirty = true;
-                }
-                (KeyModifiers::NONE, KeyCode::PageDown) => {
-                    dash.focus = FocusedPanel::History;
-                    dash.move_selection(-10);
                     dash.dirty = true;
                 }
                 (KeyModifiers::SHIFT, KeyCode::Up) => {
@@ -1101,7 +1074,7 @@ pub fn run_tui(
                     dash.scroll_preview(1, 1000);
                     dash.dirty = true;
                 }
-                (KeyModifiers::CONTROL, KeyCode::Char('c' | 'd' | 'g'))
+                (KeyModifiers::CONTROL, KeyCode::Char('c'))
                 | (KeyModifiers::NONE, KeyCode::Esc) => break Outcome::Cancel,
                 (KeyModifiers::NONE, KeyCode::Enter) => {
                     let cmd = dash.selected_command(arena).or_else(|| {

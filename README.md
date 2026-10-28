@@ -153,12 +153,12 @@ xstory history export backup.tsv
 |:---|:---|
 | <kbd>↑</kbd> or <kbd>Ctrl</kbd>+<kbd>R</kbd> | Open interactive history search from shell prompt |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Navigate candidates (bottom-up: newest to oldest) |
-| <kbd>PgUp</kbd> / <kbd>PgDn</kbd> | Jump 10 entries up / down |
-| <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd> | Scroll preview panel content |
-| <kbd>Ctrl</kbd>+<kbd>R</kbd> / <kbd>Ctrl</kbd>+<kbd>G</kbd> | Toggle Scope: **Global** (all history) $\leftrightarrow$ **Local** (current `$PWD`) |
+| <kbd>Shift</kbd>+<kbd>↑</kbd> / <kbd>Shift</kbd>+<kbd>↓</kbd> | Scroll preview panel content |
+| <kbd>Ctrl</kbd>+<kbd>R</kbd> | Toggle Scope: **Global** (all history) $\leftrightarrow$ **Local** (current `$PWD`) |
 | <kbd>Enter</kbd> | Execute selected command immediately |
 | <kbd>Tab</kbd> | Put selected command into commandline buffer for editing |
-| <kbd>Ctrl</kbd>+<kbd>U</kbd> / <kbd>Ctrl</kbd>+<kbd>W</kbd> | Clear query to start / delete word before cursor |
+| <kbd>Ctrl</kbd>+<kbd>U</kbd> | Clear query to start |
+| <kbd>←</kbd> / <kbd>→</kbd> | Move cursor left / right |
 | <kbd>Esc</kbd> / <kbd>Ctrl</kbd>+<kbd>C</kbd> | Cancel search and return to shell prompt |
 
 ---
