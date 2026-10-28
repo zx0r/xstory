@@ -319,6 +319,9 @@ pub fn format_timestamp(timestamp_ms: i64) -> String {
 }
 
 fn abbreviate_path(path: &str) -> String {
+    if path.is_empty() || path == "?" {
+        return String::new();
+    }
     if let Ok(home) = std::env::var("HOME") {
         if path == home { return "~".to_owned(); }
         if let Some(stripped) = path.strip_prefix(&home) && stripped.starts_with('/') {
@@ -326,6 +329,19 @@ fn abbreviate_path(path: &str) -> String {
         }
     }
     path.to_owned()
+}
+
+fn fit_path(path: &str, max_len: usize) -> String {
+    let count = path.chars().count();
+    if count <= max_len || max_len < 5 {
+        return path.to_owned();
+    }
+    let chars: Vec<char> = path.chars().collect();
+    let keep_front = (max_len.saturating_sub(1)) / 3;
+    let keep_back = max_len.saturating_sub(1 + keep_front);
+    let front: String = chars[..keep_front].iter().collect();
+    let back: String = chars[chars.len() - keep_back..].iter().collect();
+    format!("{front}…{back}")
 }
 
 fn format_thousands(n: usize) -> String {
@@ -747,8 +763,16 @@ pub fn render_frame(
     let p_border = panel_border_color(preview_focus);
     let mut preview_block = create_panel_block(preview_focus)
         .padding(Padding::horizontal(1))
-        .title_top(Line::from(bracketed(time_str, p_border)).alignment(Alignment::Left))
-        .title_top(Line::from(bracketed(path_str, p_border)).alignment(Alignment::Right));
+        .title_top(Line::from(bracketed(time_str, p_border)).alignment(Alignment::Left));
+
+    if !path_str.is_empty() {
+        let p_inner_w = preview_block.inner(layout.preview).width as usize;
+        let avail = p_inner_w.saturating_sub(18);
+        if avail >= 4 {
+            let fitted = fit_path(&path_str, avail);
+            preview_block = preview_block.title_top(Line::from(bracketed(fitted, p_border)).alignment(Alignment::Right));
+        }
+    }
 
     let preview_lines = dash.result.indices.get(dash.selected).map_or_else(Vec::new, |&idx| {
         let cmd = arena.cmd_str(idx);
