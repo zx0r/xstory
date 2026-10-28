@@ -103,10 +103,29 @@ pub fn fnv1a(bytes: &[u8]) -> u64 {
 
 // ── Inline atoi (no alloc) ───────────────────────────────────────
 
-#[inline] fn parse_int<T: std::str::FromStr>(s: &[u8]) -> Option<T> { std::str::from_utf8(s).ok()?.parse().ok() }
-#[inline] fn parse_i64(s: &[u8]) -> Option<i64> { parse_int(s) }
-#[inline] fn parse_u32(s: &[u8]) -> Option<u32> { parse_int(s) }
-#[inline] fn parse_i32(s: &[u8]) -> Option<i32> { parse_int(s) }
+#[inline]
+fn parse_ascii_i64(s: &[u8]) -> Option<i64> {
+    let (neg, s) = match s.first()? {
+        b'-' => (true, &s[1..]),
+        b'+' => (false, &s[1..]),
+        _ => (false, s),
+    };
+    if s.is_empty() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    for &b in s {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        n = n.checked_mul(10)?.checked_add(i64::from(b - b'0'))?;
+    }
+    Some(if neg { -n } else { n })
+}
+
+#[inline] fn parse_i64(s: &[u8]) -> Option<i64> { parse_ascii_i64(s) }
+#[inline] fn parse_u32(s: &[u8]) -> Option<u32> { u32::try_from(parse_ascii_i64(s)?).ok() }
+#[inline] fn parse_i32(s: &[u8]) -> Option<i32> { i32::try_from(parse_ascii_i64(s)?).ok() }
 
 // ── ByteView construction ────────────────────────────────────────
 
@@ -140,17 +159,19 @@ fn byteview_unescaped(s: &[u8], offset: u32) -> ByteView {
 #[inline] fn has_escapes(s: &[u8]) -> bool { memchr::memchr(b'\\', s).is_some() }
 
 #[allow(clippy::cast_possible_truncation)]
-fn unescape_into(s: &[u8], buf: &mut Vec<u8>) -> (u32, usize) {
+pub(crate) fn unescape_into(s: &[u8], buf: &mut Vec<u8>) -> (u32, usize) {
     let start = buf.len() as u32;
     let mut i = 0;
     while i < s.len() {
         if s[i] == b'\\' && i + 1 < s.len() {
-            match s[i + 1] {
-                b't'  => buf.push(b'\t'),
-                b'n'  => buf.push(b'\n'),
-                b'\\' => buf.push(b'\\'),
-                other => { buf.push(b'\\'); buf.push(other); }
-            }
+            let b = match s[i + 1] {
+                b't'  => b'\t',
+                b'n'  => b'\n',
+                b'r'  => b'\r',
+                b'\\' => b'\\',
+                other => { buf.push(b'\\'); other }
+            };
+            buf.push(b);
             i += 2;
         } else {
             buf.push(s[i]);
@@ -296,9 +317,9 @@ impl Arena {
             return;
         }
 
-        // HashMap keyed by FNV-1a hash → Vec of indices with that hash.
-        // Collision resolution: O(k) per bucket where k = collision count (typically 1).
-        let mut seen: HashMap<u64, Vec<u32>> = HashMap::with_capacity(n);
+        // HashMap keyed by FNV-1a hash -> index of newest occurrence.
+        // Flat zero-alloc per unique command. Collision resolved by exact byte comparison.
+        let mut seen: HashMap<u64, u32> = HashMap::with_capacity(n);
         let mut global_buf: Vec<u32> = Vec::with_capacity(n);
         let mut local_buf: Vec<u32> = Vec::with_capacity(n / 4);
 
@@ -308,13 +329,13 @@ impl Arena {
             let cmd = self.cmd_bytes(idx);
             let h = fnv1a(cmd);
 
-            if let Some(indices) = seen.get(&h)
-                && indices.iter().any(|&si| self.cmd_bytes(si) == cmd)
+            if let Some(&prev_idx) = seen.get(&h)
+                && self.cmd_bytes(prev_idx) == cmd
             {
                 continue;
             }
 
-            seen.entry(h).or_default().push(idx);
+            seen.insert(h, idx);
             global_buf.push(idx);
 
             if let Some(lcwd) = local_cwd

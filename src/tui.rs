@@ -297,12 +297,13 @@ fn restore_terminal(
 
 // ── Formatting Helpers ───────────────────────────────────────────
 
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #[must_use]
 pub fn format_timestamp(timestamp_ms: i64) -> String {
     if timestamp_ms <= 0 { return "--:--".to_owned(); }
-    let secs = timestamp_ms / 1000;
-    let day_sec = secs % 86400;
+    let (secs, day_sec) = (timestamp_ms / 1000, (timestamp_ms / 1000) % 86400);
     let (hour, min) = (day_sec / 3600, (day_sec % 3600) / 60);
 
     let z = (secs / 86400) + 719_468;
@@ -312,11 +313,8 @@ pub fn format_timestamp(timestamp_ms: i64) -> String {
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let month = match m {
-        1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr", 5 => "May", 6 => "Jun",
-        7 => "Jul", 8 => "Aug", 9 => "Sep", 10 => "Oct", 11 => "Nov", 12 => "Dec", _ => "???",
-    };
+    let m = if mp < 10 { mp + 2 } else { mp - 10 } as usize;
+    let month = MONTHS.get(m).copied().unwrap_or("???");
     format!("{d:02} {month} {hour:02}:{min:02}")
 }
 
@@ -361,6 +359,18 @@ pub struct MasterLayout {
     pub query:   Rect,
 }
 
+/// Count wrapped visual rows for text inside a bounded width.
+#[must_use]
+pub fn count_wrapped_rows(text: &str, line_width: u16) -> usize {
+    let width = line_width.max(1) as usize;
+    let mut rows = 0;
+    for line in text.split('\n') {
+        let w = line.chars().count();
+        rows += if w > width { w.div_ceil(width) } else { 1 };
+    }
+    rows.max(1)
+}
+
 /// Compute dynamic preview height based on command line count and terminal width (OTS-1 standard).
 #[must_use]
 pub fn calc_preview_height(command: Option<&str>, width: u16, max_height: u16) -> u16 {
@@ -370,13 +380,7 @@ pub fn calc_preview_height(command: Option<&str>, width: u16, max_height: u16) -
     match command {
         Some(cmd) if !cmd.trim().is_empty() => {
             let inner_width = width.saturating_sub(6).max(1);
-            let mut total_lines: u16 = 0;
-            for line in cmd.lines() {
-                #[allow(clippy::cast_possible_truncation)]
-                let char_count = line.chars().count() as u16;
-                let wrapped = char_count.max(1).div_ceil(inner_width);
-                total_lines = total_lines.saturating_add(wrapped);
-            }
+            let total_lines = u16::try_from(count_wrapped_rows(cmd, inner_width)).unwrap_or(u16::MAX);
             let max_content = max_height.saturating_sub(2);
             total_lines.clamp(1, max_content) + 2
         }
@@ -414,26 +418,20 @@ pub fn compute_master_layout(area: Rect, preview_height: u16) -> MasterLayout {
     }
 }
 
-/// Focus state for styling panel borders.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PanelFocus {
-    Focused,
-    Unfocused,
-}
-
 /// Get border color for a panel based on its focus state.
 #[must_use]
-pub const fn panel_border_color(focus: PanelFocus) -> Color {
-    match focus {
-        PanelFocus::Focused => Color::Indexed(109),
-        PanelFocus::Unfocused => Color::Indexed(241),
+pub const fn panel_border_color(focused: bool) -> Color {
+    if focused {
+        Color::Indexed(109)
+    } else {
+        Color::Indexed(241)
     }
 }
 
 /// Create a unified panel block with standard borders, rounded corners, and zero padding.
 #[must_use]
-pub fn create_panel_block(focus: PanelFocus) -> Block<'static> {
-    let fg = panel_border_color(focus);
+pub fn create_panel_block(focused: bool) -> Block<'static> {
+    let fg = panel_border_color(focused);
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -442,9 +440,9 @@ pub fn create_panel_block(focus: PanelFocus) -> Block<'static> {
 }
 
 impl MasterLayout {
-    #[must_use] pub fn history_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).padding(Padding::new(0, 1, 0, 0)).inner(self.history) }
-    #[must_use] pub fn preview_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).padding(Padding::horizontal(1)).inner(self.preview) }
-    #[must_use] pub fn query_inner(self) -> Rect { create_panel_block(PanelFocus::Unfocused).padding(Padding::horizontal(1)).inner(self.query) }
+    #[must_use] pub fn history_inner(self) -> Rect { create_panel_block(false).padding(Padding::new(0, 1, 0, 0)).inner(self.history) }
+    #[must_use] pub fn preview_inner(self) -> Rect { create_panel_block(false).padding(Padding::horizontal(1)).inner(self.preview) }
+    #[must_use] pub fn query_inner(self) -> Rect { create_panel_block(false).padding(Padding::horizontal(1)).inner(self.query) }
 }
 
 #[inline]
@@ -517,6 +515,30 @@ fn build_highlighted_spans<'a>(
     }
 
     let default_style = syntax::style_for(syntax::TokenKind::Plain, theme);
+
+    // Fast zero-alloc path when no query match overlay is requested
+    if query.is_none() {
+        if spans.is_empty() {
+            return vec![Span::styled(cmd, default_style)];
+        }
+        let mut out = Vec::with_capacity(spans.len() * 2 + 1);
+        let mut cursor = 0;
+        for span in spans {
+            let s = (span.start as usize).min(cmd.len());
+            let e = (span.end as usize).min(cmd.len());
+            if cursor < s {
+                out.push(Span::styled(&cmd[cursor..s], default_style));
+            }
+            if s < e {
+                out.push(Span::styled(&cmd[s..e], syntax::style_for(span.kind, theme)));
+            }
+            cursor = cursor.max(e);
+        }
+        if cursor < cmd.len() {
+            out.push(Span::styled(&cmd[cursor..], default_style));
+        }
+        return out;
+    }
 
     if cmd.is_ascii() {
         let bytes = cmd.as_bytes();
@@ -676,7 +698,7 @@ pub fn render_frame(
     f.render_widget(Line::from(header_spans).alignment(Alignment::Center), layout.actions);
 
     // 2. History List
-    let history_focus = if dash.focus == FocusedPanel::History { PanelFocus::Focused } else { PanelFocus::Unfocused };
+    let history_focus = dash.focus == FocusedPanel::History;
     let scope_char = match dash.scope { Scope::Local => "L", Scope::Global => "G" };
     let total = dash.result.indices.len();
     let current = if total == 0 { 0 } else { dash.selected.min(total.saturating_sub(1)) + 1 };
@@ -717,7 +739,7 @@ pub fn render_frame(
     f.render_widget(Paragraph::new(history_lines).block(history_block), layout.history);
 
     // 3. Preview Box
-    let preview_focus = if dash.focus == FocusedPanel::Preview { PanelFocus::Focused } else { PanelFocus::Unfocused };
+    let preview_focus = dash.focus == FocusedPanel::Preview;
     let (time_str, path_str) = dash.result.indices.get(dash.selected).map_or_else(
         || ("--:--".to_owned(), String::new()),
         |&idx| (format_timestamp(arena.timestamps[idx as usize]), abbreviate_path(arena.cwd_str(idx))),
@@ -735,10 +757,9 @@ pub fn render_frame(
     });
 
     let p_inner = preview_block.inner(layout.preview);
-    let visual_rows: usize = preview_lines.iter().map(|l| {
-        let w = l.width();
-        if p_inner.width > 0 && w > p_inner.width as usize { w.div_ceil(p_inner.width as usize) } else { 1 }
-    }).sum();
+    let visual_rows = dash.result.indices.get(dash.selected).map_or(0, |&idx| {
+        count_wrapped_rows(arena.cmd_str(idx), p_inner.width)
+    });
 
     #[allow(clippy::cast_possible_truncation)]
     let max_scroll = (visual_rows as u16).saturating_sub(p_inner.height);
@@ -752,7 +773,7 @@ pub fn render_frame(
     f.render_widget(Paragraph::new(preview_lines).block(preview_block).wrap(Wrap { trim: false }).scroll((p_scroll, 0)), layout.preview);
 
     // 4. Search Query Box
-    let query_focus = if dash.focus == FocusedPanel::Query { PanelFocus::Focused } else { PanelFocus::Unfocused };
+    let query_focus = dash.focus == FocusedPanel::Query;
     let query_block = create_panel_block(query_focus).padding(Padding::horizontal(1));
     let q_inner = query_block.inner(layout.query);
     let line = if dash.query.is_empty() {
@@ -1127,8 +1148,8 @@ mod tests {
 
     #[test]
     fn unified_panel_block_styling_and_focus() {
-        let focused_block = create_panel_block(PanelFocus::Focused);
-        let unfocused_block = create_panel_block(PanelFocus::Unfocused);
+        let focused_block = create_panel_block(true);
+        let unfocused_block = create_panel_block(false);
 
         let area = Rect::new(0, 0, 80, 10);
         let inner_focused = focused_block.inner(area);

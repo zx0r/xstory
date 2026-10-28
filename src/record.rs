@@ -128,12 +128,7 @@ pub fn record_to_path(
 
     let mut buf = Vec::with_capacity(64 + final_cmd.len() + cwd_ref.len());
 
-    write_i64(&mut buf, timestamp_ms);
-    buf.push(b'\t');
-    write_u64(&mut buf, duration_ms);
-    buf.push(b'\t');
-    write_i32(&mut buf, exit_code);
-    buf.push(b'\t');
+    let _ = write!(buf, "{timestamp_ms}\t{duration_ms}\t{exit_code}\t");
     escape_into(cwd_ref, &mut buf);
     buf.push(b'\t');
     escape_into(&final_cmd, &mut buf);
@@ -151,26 +146,6 @@ pub fn record_to_path(
 
     file.write_all(&buf)?;
     Ok(())
-}
-
-// ── Integer serialization (no alloc) ─────────────────────────────
-
-fn write_i64(buf: &mut Vec<u8>, val: i64) {
-    if val < 0 { buf.push(b'-'); }
-    write_u64(buf, val.unsigned_abs());
-}
-
-#[allow(clippy::cast_possible_truncation)]
-fn write_u64(buf: &mut Vec<u8>, mut val: u64) {
-    if val == 0 { buf.push(b'0'); return; }
-    let start = buf.len();
-    while val > 0 { buf.push(b'0' + (val % 10) as u8); val /= 10; }
-    buf[start..].reverse();
-}
-
-#[inline]
-fn write_i32(buf: &mut Vec<u8>, val: i32) {
-    write_i64(buf, i64::from(val));
 }
 
 fn now_epoch_ms() -> i64 {
@@ -220,29 +195,11 @@ fn unmetafy_in_place(buf: &mut Vec<u8>) {
     buf.truncate(w);
 }
 
-/// Unified zero-alloc unescaper for both TSV and Fish into a reusable buffer.
+/// Unified zero-alloc unescaper delegating to canonical `arena::unescape_into`.
+#[inline]
 fn unescape_into(s: &[u8], out: &mut Vec<u8>) {
     out.clear();
-    let mut i = 0;
-    while i < s.len() {
-        if s[i] == b'\\' && i + 1 < s.len() {
-            let b = match s[i + 1] {
-                b'n' => b'\n',
-                b't' => b'\t',
-                b'r' => b'\r',
-                b'\\' => b'\\',
-                c => {
-                    out.push(b'\\');
-                    c
-                }
-            };
-            out.push(b);
-            i += 2;
-        } else {
-            out.push(s[i]);
-            i += 1;
-        }
-    }
+    crate::arena::unescape_into(s, out);
 }
 
 #[inline]
@@ -309,21 +266,28 @@ pub fn export_history_from_path(
         stdout_writer = Some(BufWriter::with_capacity(64 * 1024, std::io::stdout().lock()));
     }
 
+    if scope == crate::arena::Scope::Global {
+        if let Some(ref mut w) = file_writer {
+            std::io::copy(&mut reader, w)?;
+            w.flush()?;
+        } else if let Some(ref mut w) = stdout_writer {
+            std::io::copy(&mut reader, w)?;
+            w.flush()?;
+        }
+        return Ok(());
+    }
+
     let mut line = Vec::new();
     let mut unesc = Vec::new();
     while reader.read_until(b'\n', &mut line)? > 0 {
-        let keep = if scope == crate::arena::Scope::Local {
-            cwd.as_ref().is_none_or(|dir| {
-                let mut parts = line.splitn(5, |&b| b == b'\t');
-                let (_, _, _, row_cwd) = (parts.next(), parts.next(), parts.next(), parts.next());
-                row_cwd.is_some_and(|c| {
-                    unescape_into(c, &mut unesc);
-                    unesc == dir.as_bytes()
-                })
+        let keep = cwd.as_ref().is_none_or(|dir| {
+            let mut parts = line.splitn(5, |&b| b == b'\t');
+            let (_, _, _, row_cwd) = (parts.next(), parts.next(), parts.next(), parts.next());
+            row_cwd.is_some_and(|c| {
+                unescape_into(c, &mut unesc);
+                unesc == dir.as_bytes()
             })
-        } else {
-            true
-        };
+        });
         if keep {
             if let Some(ref mut w) = file_writer {
                 w.write_all(&line)?;
@@ -373,12 +337,7 @@ impl IngestCtx<'_> {
             return Ok(());
         }
         let ts = if ts_ms > 0 { ts_ms } else { now_epoch_ms() };
-        write_i64(&mut self.out_buf, ts);
-        self.out_buf.push(b'\t');
-        write_u64(&mut self.out_buf, dur_ms);
-        self.out_buf.push(b'\t');
-        write_i32(&mut self.out_buf, exit);
-        self.out_buf.push(b'\t');
+        let _ = write!(self.out_buf, "{ts}\t{dur_ms}\t{exit}\t");
         escape_into(cwd, &mut self.out_buf);
         self.out_buf.push(b'\t');
         escape_into(final_cmd, &mut self.out_buf);
@@ -773,21 +732,6 @@ mod tests {
         assert_eq!(arena.cmd_str(0), "ls");
         assert_eq!(arena.cmd_str(1), "pwd");
         assert_eq!(arena.cmd_str(2), "whoami");
-    }
-
-    #[test]
-    fn write_i64_formatting() {
-        let mut buf = Vec::new();
-        write_i64(&mut buf, 12345);
-        assert_eq!(std::str::from_utf8(&buf).expect("utf8"), "12345");
-
-        buf.clear();
-        write_i64(&mut buf, -42);
-        assert_eq!(std::str::from_utf8(&buf).expect("utf8"), "-42");
-
-        buf.clear();
-        write_i64(&mut buf, 0);
-        assert_eq!(std::str::from_utf8(&buf).expect("utf8"), "0");
     }
 
     #[test]

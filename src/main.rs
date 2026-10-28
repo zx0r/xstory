@@ -395,11 +395,18 @@ fn run() -> Result<(), Error> {
             print!("{hook}");
             Ok(())
         }
+        action => execute(action, cli.history_path, cli.scope),
+    }
+}
+
+fn execute(action: Action, history_path_override: Option<PathBuf>, scope: Option<arena::Scope>) -> Result<(), Error> {
+    let mut config = arena::Config::load();
+    if let Some(path) = history_path_override {
+        config.history_path = path;
+    }
+
+    match action {
         Action::Record { cmd_parts, exit_code, duration_ms, cwd, from_stdin } => {
-            let mut config = arena::Config::load();
-            if let Some(h) = cli.history_path {
-                config.history_path = h;
-            }
             let actual_parts = if from_stdin {
                 use std::io::Read;
                 let mut stdin_buf = String::new();
@@ -412,21 +419,13 @@ fn run() -> Result<(), Error> {
             record::record(&actual_parts, exit_code, duration_ms, cwd.as_deref(), &config)
         }
         Action::HistoryImport { path } => {
-            let mut config = arena::Config::load();
-            if let Some(h) = cli.history_path {
-                config.history_path = h;
-            }
             let count = record::import_history(path.as_deref(), &config)?;
             eprintln!("xstory: imported {count} commands");
             Ok(())
         }
         Action::HistoryExport { path } => {
-            let mut config = arena::Config::load();
-            if let Some(h) = cli.history_path {
-                config.history_path = h;
-            }
-            let scope = cli.scope.unwrap_or(arena::Scope::Global);
-            record::export_history(path.as_deref(), scope, &config)?;
+            let export_scope = scope.unwrap_or(arena::Scope::Global);
+            record::export_history(path.as_deref(), export_scope, &config)?;
             Ok(())
         }
         Action::Search { initial_query } => {
@@ -434,10 +433,6 @@ fn run() -> Result<(), Error> {
             #[cfg(unix)]
             signals::install();
 
-            let mut config = arena::Config::load();
-            if let Some(h) = cli.history_path {
-                config.history_path = h;
-            }
             let current_dir = std::env::var("PWD").ok().or_else(|| {
                 std::env::current_dir().ok().and_then(|p| p.into_os_string().into_string().ok())
             });
@@ -456,6 +451,7 @@ fn run() -> Result<(), Error> {
             }
             std::process::exit(code);
         }
+        Action::Help | Action::Version | Action::Init { .. } => unreachable!(),
     }
 }
 
