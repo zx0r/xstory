@@ -90,15 +90,11 @@ __xstory_init() {
         fi
     }
 
-    bind -m emacs -x "\"$KEY1\": __xstory_search_dispatch"
-    bind -m vi-insert -x "\"$KEY1\": __xstory_search_dispatch"
-    bind -m emacs "\"$KEY2\": \"\""
-    bind -m vi-insert "\"$KEY2\": \"\""
+    bind -x "\"$KEY1\": __xstory_search_dispatch"
+    bind "\"$KEY2\": \"\""
 
-    bind -m emacs "\"\\C-r\": \"$KEY1$KEY2\""
-    bind -m vi-insert "\"\\C-r\": \"$KEY1$KEY2\""
-    bind -m emacs "\"\\e[A\": \"$KEY1$KEY2\""
-    bind -m vi-insert "\"\\e[A\": \"$KEY1$KEY2\""
+    bind "\"\\C-r\": \"$KEY1$KEY2\""
+    bind "\"\\e[A\": \"$KEY1$KEY2\""
 }
 __xstory_init
 unset -f __xstory_init
