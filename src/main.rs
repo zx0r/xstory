@@ -211,26 +211,58 @@ end
 
 #[cfg(unix)]
 mod signals {
-    unsafe extern "C" { fn signal(s: i32, h: usize) -> usize; fn raise(s: i32) -> i32; }
-    extern "C" fn handle_signal(sig: i32) { crate::tui::reset_terminal(); unsafe { signal(sig, 0); let _ = raise(sig); } }
-    pub fn install() { unsafe { signal(2, handle_signal as *const () as usize); signal(15, handle_signal as *const () as usize); signal(28, 1); } }
+    unsafe extern "C" {
+        fn signal(s: i32, h: usize) -> usize;
+        fn raise(s: i32) -> i32;
+    }
+    extern "C" fn handle_signal(sig: i32) {
+        crate::tui::reset_terminal();
+        unsafe {
+            signal(sig, 0);
+            let _ = raise(sig);
+        }
+    }
+    pub fn install() {
+        unsafe {
+            signal(2, handle_signal as *const () as usize);
+            signal(15, handle_signal as *const () as usize);
+            signal(28, 1);
+        }
+    }
 }
 
 // ── Panic Hook ───────────────────────────────────────────────────
 
 fn install_panic_hook() {
     let default = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| { tui::reset_terminal(); default(info); }));
+    std::panic::set_hook(Box::new(move |info| {
+        tui::reset_terminal();
+        default(info);
+    }));
 }
 
 // ── CLI Actions ──────────────────────────────────────────────────
 
 enum Action {
-    Record { cmd_parts: Vec<String>, exit_code: i32, duration_ms: u64, cwd: Option<String>, from_stdin: bool },
-    Search { initial_query: Option<String> },
-    Init { shell: String },
-    HistoryImport { path: Option<String> },
-    HistoryExport { path: Option<String> },
+    Record {
+        cmd_parts: Vec<String>,
+        exit_code: i32,
+        duration_ms: u64,
+        cwd: Option<String>,
+        from_stdin: bool,
+    },
+    Search {
+        initial_query: Option<String>,
+    },
+    Init {
+        shell: String,
+    },
+    HistoryImport {
+        path: Option<String>,
+    },
+    HistoryExport {
+        path: Option<String>,
+    },
     Help,
     Version,
 }
@@ -244,26 +276,44 @@ struct Cli {
 // ── Argument Parsing ─────────────────────────────────────────────
 
 fn parse_record_args(args: &[String]) -> Action {
-    let (mut exit, mut dur, mut cwd, mut pos, mut dd, mut from_stdin) = (None, None, None, Vec::new(), false, false);
+    let (mut exit, mut dur, mut cwd, mut pos, mut dd, mut from_stdin) =
+        (None, None, None, Vec::new(), false, false);
     let mut iter = args.iter();
     while let Some(a) = iter.next() {
-        if dd { pos.push(a.clone()); }
-        else if a == "--" { dd = true; }
-        else if a == "--stdin" { from_stdin = true; }
-        else if let Some(v) = a.strip_prefix("--exit=") { exit = v.parse().ok(); }
-        else if let Some(v) = a.strip_prefix("--duration=") { dur = v.parse().ok(); }
-        else if let Some(v) = a.strip_prefix("--cwd=") { cwd = Some(v.to_owned()); }
-        else if a == "--exit" { exit = iter.next().and_then(|s| s.parse().ok()); }
-        else if a == "--duration" { dur = iter.next().and_then(|s| s.parse().ok()); }
-        else if a == "--cwd" { cwd = iter.next().cloned(); }
-        else { pos.push(a.clone()); }
+        if dd {
+            pos.push(a.clone());
+        } else if a == "--" {
+            dd = true;
+        } else if a == "--stdin" {
+            from_stdin = true;
+        } else if let Some(v) = a.strip_prefix("--exit=") {
+            exit = v.parse().ok();
+        } else if let Some(v) = a.strip_prefix("--duration=") {
+            dur = v.parse().ok();
+        } else if let Some(v) = a.strip_prefix("--cwd=") {
+            cwd = Some(v.to_owned());
+        } else if a == "--exit" {
+            exit = iter.next().and_then(|s| s.parse().ok());
+        } else if a == "--duration" {
+            dur = iter.next().and_then(|s| s.parse().ok());
+        } else if a == "--cwd" {
+            cwd = iter.next().cloned();
+        } else {
+            pos.push(a.clone());
+        }
     }
     let (cmd_parts, exit_code, duration_ms) = if exit.is_none() || dur.is_none() {
         let n = pos.len();
-        if n >= 3 && let (Ok(e), Ok(d)) = (pos[1].parse::<i32>(), pos[2].parse::<u64>()) {
-            if n > 3 && cwd.is_none() { cwd = Some(pos[3].clone()); }
+        if n >= 3
+            && let (Ok(e), Ok(d)) = (pos[1].parse::<i32>(), pos[2].parse::<u64>())
+        {
+            if n > 3 && cwd.is_none() {
+                cwd = Some(pos[3].clone());
+            }
             (vec![pos[0].clone()], e, d)
-        } else if n >= 3 && let (Ok(e), Ok(d)) = (pos[n - 2].parse::<i32>(), pos[n - 1].parse::<u64>()) {
+        } else if n >= 3
+            && let (Ok(e), Ok(d)) = (pos[n - 2].parse::<i32>(), pos[n - 1].parse::<u64>())
+        {
             (pos[..n - 2].to_vec(), e, d)
         } else {
             (pos, exit.unwrap_or(0), dur.unwrap_or(0))
@@ -271,9 +321,16 @@ fn parse_record_args(args: &[String]) -> Action {
     } else {
         (pos, exit.unwrap_or(0), dur.unwrap_or(0))
     };
-    Action::Record { cmd_parts, exit_code, duration_ms, cwd, from_stdin }
+    Action::Record {
+        cmd_parts,
+        exit_code,
+        duration_ms,
+        cwd,
+        from_stdin,
+    }
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_args(args: &[String]) -> Result<Cli, Error> {
     let mut history_path = None;
     let mut scope = None;
@@ -282,26 +339,46 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
 
     while let Some(arg) = it.next() {
         if arg == "-h" || arg == "--help" {
-            return Ok(Cli { history_path, scope, action: Action::Help });
+            return Ok(Cli {
+                history_path,
+                scope,
+                action: Action::Help,
+            });
         } else if arg == "-v" || arg == "-V" || arg == "--version" {
-            return Ok(Cli { history_path, scope, action: Action::Version });
+            return Ok(Cli {
+                history_path,
+                scope,
+                action: Action::Version,
+            });
         } else if let Some(val) = arg.strip_prefix("--history=") {
             history_path = Some(PathBuf::from(val));
         } else if arg == "-H" || arg == "--history" {
-            let val = it.next().ok_or(Error::InvalidArgs("missing argument for --history"))?;
+            let val = it
+                .next()
+                .ok_or(Error::InvalidArgs("missing argument for --history"))?;
             history_path = Some(PathBuf::from(val));
         } else if let Some(val) = arg.strip_prefix("--scope=") {
             scope = match val.to_lowercase().as_str() {
                 "global" => Some(arena::Scope::Global),
                 "local" => Some(arena::Scope::Local),
-                _ => return Err(Error::InvalidArgs("invalid scope (expected global or local)")),
+                _ => {
+                    return Err(Error::InvalidArgs(
+                        "invalid scope (expected global or local)",
+                    ));
+                }
             };
         } else if arg == "-s" || arg == "--scope" {
-            let val = it.next().ok_or(Error::InvalidArgs("missing argument for --scope"))?;
+            let val = it
+                .next()
+                .ok_or(Error::InvalidArgs("missing argument for --scope"))?;
             scope = match val.to_lowercase().as_str() {
                 "global" => Some(arena::Scope::Global),
                 "local" => Some(arena::Scope::Local),
-                _ => return Err(Error::InvalidArgs("invalid scope (expected global or local)")),
+                _ => {
+                    return Err(Error::InvalidArgs(
+                        "invalid scope (expected global or local)",
+                    ));
+                }
             };
         } else {
             rest.push(arg.clone());
@@ -313,7 +390,13 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
     }
 
     let Some(subcmd) = rest.first().map(String::as_str) else {
-        return Ok(Cli { history_path, scope, action: Action::Search { initial_query: None } });
+        return Ok(Cli {
+            history_path,
+            scope,
+            action: Action::Search {
+                initial_query: None,
+            },
+        });
     };
 
     let action = match subcmd {
@@ -321,19 +404,39 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
             let sub = rest.get(1).map(String::as_str);
             let extra = rest.get(2).map(String::as_str);
             if rest.len() > 3 || extra.is_some_and(|p| p.starts_with('-') && p != "-") {
-                return Err(Error::InvalidArgs("usage: xstory history <import|export> [path]"));
+                return Err(Error::InvalidArgs(
+                    "usage: xstory history <import|export> [path]",
+                ));
             }
             match sub {
-                Some("import") => Action::HistoryImport { path: extra.map(str::to_owned) },
-                Some("export") => Action::HistoryExport { path: extra.map(str::to_owned) },
+                Some("import") => Action::HistoryImport {
+                    path: extra.map(str::to_owned),
+                },
+                Some("export") => Action::HistoryExport {
+                    path: extra.map(str::to_owned),
+                },
                 Some("-h" | "--help") => Action::Help,
-                _ => return Err(Error::InvalidArgs("usage: xstory history <import|export> [path]")),
+                _ => {
+                    return Err(Error::InvalidArgs(
+                        "usage: xstory history <import|export> [path]",
+                    ));
+                }
             }
         }
         "init" => match rest.get(1).map(|s| s.to_lowercase()).as_deref() {
-            Some(s @ ("bash" | "zsh" | "fish")) => Action::Init { shell: s.to_owned() },
-            Some(_) => return Err(Error::InvalidArgs("unsupported shell (supported: bash, zsh, fish)")),
-            None => return Err(Error::InvalidArgs("missing shell argument for init (expected bash, zsh, or fish)")),
+            Some(s @ ("bash" | "zsh" | "fish")) => Action::Init {
+                shell: s.to_owned(),
+            },
+            Some(_) => {
+                return Err(Error::InvalidArgs(
+                    "unsupported shell (supported: bash, zsh, fish)",
+                ));
+            }
+            None => {
+                return Err(Error::InvalidArgs(
+                    "missing shell argument for init (expected bash, zsh, or fish)",
+                ));
+            }
         },
         "--" => {
             let q = rest.get(1).cloned();
@@ -342,17 +445,31 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
         "search" => {
             let (mut q, mut iter) = (None, rest[1..].iter());
             while let Some(a) = iter.next() {
-                if let Some(val) = a.strip_prefix("--query=") { q = Some(val.to_owned()); }
-                else if a == "--query" || a == "-q" { q = iter.next().cloned(); }
-                else if !a.starts_with('-') && q.is_none() { q = Some(a.clone()); }
+                if let Some(val) = a.strip_prefix("--query=") {
+                    q = Some(val.to_owned());
+                } else if a == "--query" || a == "-q" {
+                    q = iter.next().cloned();
+                } else if !a.starts_with('-') && q.is_none() {
+                    q = Some(a.clone());
+                }
             }
             Action::Search { initial_query: q }
         }
         "record" => parse_record_args(&rest[1..]),
-        _ => return Err(Error::InvalidArgs(if subcmd.starts_with('-') { "unknown option" } else { "unknown subcommand" })),
+        _ => {
+            return Err(Error::InvalidArgs(if subcmd.starts_with('-') {
+                "unknown option"
+            } else {
+                "unknown subcommand"
+            }));
+        }
     };
 
-    Ok(Cli { history_path, scope, action })
+    Ok(Cli {
+        history_path,
+        scope,
+        action,
+    })
 }
 
 fn print_help() {
@@ -386,8 +503,14 @@ fn run() -> Result<(), Error> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cli = parse_args(&args)?;
     match cli.action {
-        Action::Help => { print_help(); Ok(()) }
-        Action::Version => { println!("xstory 0.1.0"); Ok(()) }
+        Action::Help => {
+            print_help();
+            Ok(())
+        }
+        Action::Version => {
+            println!("xstory 0.1.0");
+            Ok(())
+        }
         Action::Init { shell } => {
             let hook = match shell.as_str() {
                 "bash" => BASH_HOOK,
@@ -402,24 +525,43 @@ fn run() -> Result<(), Error> {
     }
 }
 
-fn execute(action: Action, history_path_override: Option<PathBuf>, scope: Option<arena::Scope>) -> Result<(), Error> {
+fn execute(
+    action: Action,
+    history_path_override: Option<PathBuf>,
+    scope: Option<arena::Scope>,
+) -> Result<(), Error> {
     let mut config = arena::Config::load();
     if let Some(path) = history_path_override {
         config.history_path = path;
     }
 
     match action {
-        Action::Record { cmd_parts, exit_code, duration_ms, cwd, from_stdin } => {
+        Action::Record {
+            cmd_parts,
+            exit_code,
+            duration_ms,
+            cwd,
+            from_stdin,
+        } => {
             let actual_parts = if from_stdin {
                 use std::io::Read;
                 let mut stdin_buf = String::new();
                 std::io::stdin().read_to_string(&mut stdin_buf)?;
-                let cmd = stdin_buf.strip_suffix("\r\n").or_else(|| stdin_buf.strip_suffix('\n')).unwrap_or(&stdin_buf);
+                let cmd = stdin_buf
+                    .strip_suffix("\r\n")
+                    .or_else(|| stdin_buf.strip_suffix('\n'))
+                    .unwrap_or(&stdin_buf);
                 vec![cmd.to_owned()]
             } else {
                 cmd_parts
             };
-            record::record(&actual_parts, exit_code, duration_ms, cwd.as_deref(), &config)
+            record::record(
+                &actual_parts,
+                exit_code,
+                duration_ms,
+                cwd.as_deref(),
+                &config,
+            )
         }
         Action::HistoryImport { path } => {
             let count = record::import_history(path.as_deref(), &config)?;
@@ -437,7 +579,9 @@ fn execute(action: Action, history_path_override: Option<PathBuf>, scope: Option
             signals::install();
 
             let current_dir = std::env::var("PWD").ok().or_else(|| {
-                std::env::current_dir().ok().and_then(|p| p.into_os_string().into_string().ok())
+                std::env::current_dir()
+                    .ok()
+                    .and_then(|p| p.into_os_string().into_string().ok())
             });
 
             let arena = arena::Arena::load(&config.history_path, current_dir.as_deref())?;
@@ -466,11 +610,21 @@ mod tests {
 
     #[test]
     fn parse_help_version() {
-        assert!(matches!(parse_args(&["--help".into()]), Ok(cli) if matches!(cli.action, Action::Help)));
-        assert!(matches!(parse_args(&["-h".into()]), Ok(cli) if matches!(cli.action, Action::Help)));
-        assert!(matches!(parse_args(&["--version".into()]), Ok(cli) if matches!(cli.action, Action::Version)));
-        assert!(matches!(parse_args(&["-v".into()]), Ok(cli) if matches!(cli.action, Action::Version)));
-        assert!(matches!(parse_args(&["-V".into()]), Ok(cli) if matches!(cli.action, Action::Version)));
+        assert!(
+            matches!(parse_args(&["--help".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+        );
+        assert!(
+            matches!(parse_args(&["-h".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+        );
+        assert!(
+            matches!(parse_args(&["--version".into()]), Ok(cli) if matches!(cli.action, Action::Version))
+        );
+        assert!(
+            matches!(parse_args(&["-v".into()]), Ok(cli) if matches!(cli.action, Action::Version))
+        );
+        assert!(
+            matches!(parse_args(&["-V".into()]), Ok(cli) if matches!(cli.action, Action::Version))
+        );
     }
 
     #[test]
@@ -488,14 +642,18 @@ mod tests {
     fn parse_search_query() {
         match parse_args(&["search".into(), "--query=git".into()]) {
             Ok(cli) => match cli.action {
-                Action::Search { initial_query } => assert_eq!(initial_query.as_deref(), Some("git")),
+                Action::Search { initial_query } => {
+                    assert_eq!(initial_query.as_deref(), Some("git"));
+                }
                 _ => panic!("expected search with query"),
             },
             _ => panic!("expected parse success"),
         }
         match parse_args(&["search".into(), "-q".into(), "cargo".into()]) {
             Ok(cli) => match cli.action {
-                Action::Search { initial_query } => assert_eq!(initial_query.as_deref(), Some("cargo")),
+                Action::Search { initial_query } => {
+                    assert_eq!(initial_query.as_deref(), Some("cargo"));
+                }
                 _ => panic!("expected search with query"),
             },
             _ => panic!("expected parse success"),
@@ -514,7 +672,13 @@ mod tests {
         ];
         match parse_args(&args) {
             Ok(cli) => match cli.action {
-                Action::Record { cmd_parts, exit_code, duration_ms, cwd, from_stdin } => {
+                Action::Record {
+                    cmd_parts,
+                    exit_code,
+                    duration_ms,
+                    cwd,
+                    from_stdin,
+                } => {
                     assert_eq!(cmd_parts, vec!["git", "status"]);
                     assert_eq!(exit_code, 0);
                     assert_eq!(duration_ms, 150);
@@ -538,7 +702,13 @@ mod tests {
         ];
         match parse_args(&args) {
             Ok(cli) => match cli.action {
-                Action::Record { cmd_parts, exit_code, duration_ms, cwd, from_stdin } => {
+                Action::Record {
+                    cmd_parts,
+                    exit_code,
+                    duration_ms,
+                    cwd,
+                    from_stdin,
+                } => {
                     assert_eq!(cmd_parts, vec!["ls -la"]);
                     assert_eq!(exit_code, 0);
                     assert_eq!(duration_ms, 100);
@@ -562,7 +732,13 @@ mod tests {
         ];
         match parse_args(&args) {
             Ok(cli) => match cli.action {
-                Action::Record { cmd_parts, exit_code, duration_ms, cwd, from_stdin } => {
+                Action::Record {
+                    cmd_parts,
+                    exit_code,
+                    duration_ms,
+                    cwd,
+                    from_stdin,
+                } => {
                     assert!(cmd_parts.is_empty());
                     assert_eq!(exit_code, 0);
                     assert_eq!(duration_ms, 100);
@@ -579,7 +755,9 @@ mod tests {
     fn parse_search_double_dash() {
         match parse_args(&["--".into(), "git commit".into()]) {
             Ok(cli) => match cli.action {
-                Action::Search { initial_query } => assert_eq!(initial_query.as_deref(), Some("git commit")),
+                Action::Search { initial_query } => {
+                    assert_eq!(initial_query.as_deref(), Some("git commit"));
+                }
                 _ => panic!("expected search"),
             },
             _ => panic!("expected parse success"),
@@ -588,29 +766,64 @@ mod tests {
 
     #[test]
     fn parse_init_shells() {
-        assert!(matches!(parse_args(&["init".into(), "bash".into()]), Ok(cli) if matches!(cli.action, Action::Init { ref shell } if shell == "bash")));
-        assert!(matches!(parse_args(&["init".into(), "zsh".into()]), Ok(cli) if matches!(cli.action, Action::Init { ref shell } if shell == "zsh")));
-        assert!(matches!(parse_args(&["init".into(), "fish".into()]), Ok(cli) if matches!(cli.action, Action::Init { ref shell } if shell == "fish")));
+        assert!(
+            matches!(parse_args(&["init".into(), "bash".into()]), Ok(cli) if matches!(cli.action, Action::Init { ref shell } if shell == "bash"))
+        );
+        assert!(
+            matches!(parse_args(&["init".into(), "zsh".into()]), Ok(cli) if matches!(cli.action, Action::Init { ref shell } if shell == "zsh"))
+        );
+        assert!(
+            matches!(parse_args(&["init".into(), "fish".into()]), Ok(cli) if matches!(cli.action, Action::Init { ref shell } if shell == "fish"))
+        );
 
-        assert!(matches!(parse_args(&["init".into()]), Err(Error::InvalidArgs(_))));
-        assert!(matches!(parse_args(&["init".into(), "powershell".into()]), Err(Error::InvalidArgs(_))));
+        assert!(matches!(
+            parse_args(&["init".into()]),
+            Err(Error::InvalidArgs(_))
+        ));
+        assert!(matches!(
+            parse_args(&["init".into(), "powershell".into()]),
+            Err(Error::InvalidArgs(_))
+        ));
     }
 
     #[test]
     fn parse_history_subcommands() {
-        assert!(matches!(parse_args(&["history".into(), "import".into()]), Ok(cli) if matches!(cli.action, Action::HistoryImport { path: None })));
-        assert!(matches!(parse_args(&["history".into(), "import".into(), "hist.log".into()]), Ok(cli) if matches!(cli.action, Action::HistoryImport { path: Some(ref p) } if p == "hist.log")));
-        assert!(matches!(parse_args(&["history".into(), "export".into()]), Ok(cli) if matches!(cli.action, Action::HistoryExport { path: None })));
-        assert!(matches!(parse_args(&["history".into(), "export".into(), "-".into()]), Ok(cli) if matches!(cli.action, Action::HistoryExport { path: Some(ref p) } if p == "-")));
-        assert!(matches!(parse_args(&["history".into(), "export".into(), "out.tsv".into()]), Ok(cli) if matches!(cli.action, Action::HistoryExport { path: Some(ref p) } if p == "out.tsv")));
+        assert!(
+            matches!(parse_args(&["history".into(), "import".into()]), Ok(cli) if matches!(cli.action, Action::HistoryImport { path: None }))
+        );
+        assert!(
+            matches!(parse_args(&["history".into(), "import".into(), "hist.log".into()]), Ok(cli) if matches!(cli.action, Action::HistoryImport { path: Some(ref p) } if p == "hist.log"))
+        );
+        assert!(
+            matches!(parse_args(&["history".into(), "export".into()]), Ok(cli) if matches!(cli.action, Action::HistoryExport { path: None }))
+        );
+        assert!(
+            matches!(parse_args(&["history".into(), "export".into(), "-".into()]), Ok(cli) if matches!(cli.action, Action::HistoryExport { path: Some(ref p) } if p == "-"))
+        );
+        assert!(
+            matches!(parse_args(&["history".into(), "export".into(), "out.tsv".into()]), Ok(cli) if matches!(cli.action, Action::HistoryExport { path: Some(ref p) } if p == "out.tsv"))
+        );
 
-        assert!(matches!(parse_args(&["history".into()]), Err(Error::InvalidArgs(_))));
-        assert!(matches!(parse_args(&["history".into(), "import".into(), "--invalid".into()]), Err(Error::InvalidArgs(_))));
+        assert!(matches!(
+            parse_args(&["history".into()]),
+            Err(Error::InvalidArgs(_))
+        ));
+        assert!(matches!(
+            parse_args(&["history".into(), "import".into(), "--invalid".into()]),
+            Err(Error::InvalidArgs(_))
+        ));
     }
 
     #[test]
     fn parse_global_flags_with_subcommand() {
-        let args = vec!["-H".into(), "/tmp/custom.tsv".into(), "-s".into(), "local".into(), "history".into(), "export".into()];
+        let args = vec![
+            "-H".into(),
+            "/tmp/custom.tsv".into(),
+            "-s".into(),
+            "local".into(),
+            "history".into(),
+            "export".into(),
+        ];
         match parse_args(&args) {
             Ok(cli) => {
                 assert_eq!(cli.history_path, Some(PathBuf::from("/tmp/custom.tsv")));
@@ -623,8 +836,12 @@ mod tests {
 
     #[test]
     fn parse_unknown_subcommand() {
-        assert!(matches!(parse_args(&["foobar".into()]), Err(Error::InvalidArgs(msg)) if msg == "unknown subcommand"));
-        assert!(matches!(parse_args(&["--unknown-flag".into()]), Err(Error::InvalidArgs(msg)) if msg == "unknown option"));
+        assert!(
+            matches!(parse_args(&["foobar".into()]), Err(Error::InvalidArgs(msg)) if msg == "unknown subcommand")
+        );
+        assert!(
+            matches!(parse_args(&["--unknown-flag".into()]), Err(Error::InvalidArgs(msg)) if msg == "unknown option")
+        );
     }
 
     #[test]

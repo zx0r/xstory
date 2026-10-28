@@ -1,7 +1,7 @@
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::io::Write;
 use std::path::Path;
-use std::hint::black_box;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use xstory::arena::{Arena, Scope};
 use xstory::search::search;
 

@@ -10,7 +10,16 @@ fn e2e_ingestion_and_roundtrip() {
 
     let mut cmd = Command::cargo_bin("xstory").expect("binary");
     cmd.env("XSTORY_HISTORY_PATH", &history_path)
-        .args(["record", "git", "commit", "-m", "initial", "--exit=0", "--duration=120", "--cwd=/test/project"])
+        .args([
+            "record",
+            "git",
+            "commit",
+            "-m",
+            "initial",
+            "--exit=0",
+            "--duration=120",
+            "--cwd=/test/project",
+        ])
         .assert()
         .success();
 
@@ -38,7 +47,11 @@ fn e2e_deduplication_newest_wins() {
 
     let arena = Arena::load(&history_path, None).expect("load");
     assert_eq!(arena.len(), 3, "raw entries must be 3");
-    assert_eq!(arena.global_indices.len(), 1, "deduped global indices must be 1");
+    assert_eq!(
+        arena.global_indices.len(),
+        1,
+        "deduped global indices must be 1"
+    );
     // Newest index is 2
     assert_eq!(arena.global_indices[0], 2);
     assert_eq!(arena.cmd_str(arena.global_indices[0]), "cargo test");
@@ -51,24 +64,44 @@ fn e2e_scope_isolation_global_and_local() {
 
     let mut cmd1 = Command::cargo_bin("xstory").expect("binary");
     cmd1.env("XSTORY_HISTORY_PATH", &history_path)
-        .args(["record", "npm", "start", "--exit=0", "--duration=100", "--cwd=/home/user/frontend"])
+        .args([
+            "record",
+            "npm",
+            "start",
+            "--exit=0",
+            "--duration=100",
+            "--cwd=/home/user/frontend",
+        ])
         .assert()
         .success();
 
     let mut cmd2 = Command::cargo_bin("xstory").expect("binary");
     cmd2.env("XSTORY_HISTORY_PATH", &history_path)
-        .args(["record", "cargo", "run", "--exit=0", "--duration=200", "--cwd=/home/user/backend"])
+        .args([
+            "record",
+            "cargo",
+            "run",
+            "--exit=0",
+            "--duration=200",
+            "--cwd=/home/user/backend",
+        ])
         .assert()
         .success();
 
     let arena_frontend = Arena::load(&history_path, Some("/home/user/frontend")).expect("load");
     assert_eq!(arena_frontend.scope_indices(Scope::Global).len(), 2);
     assert_eq!(arena_frontend.scope_indices(Scope::Local).len(), 1);
-    assert_eq!(arena_frontend.cmd_str(arena_frontend.scope_indices(Scope::Local)[0]), "npm start");
+    assert_eq!(
+        arena_frontend.cmd_str(arena_frontend.scope_indices(Scope::Local)[0]),
+        "npm start"
+    );
 
     let arena_backend = Arena::load(&history_path, Some("/home/user/backend")).expect("load");
     assert_eq!(arena_backend.scope_indices(Scope::Local).len(), 1);
-    assert_eq!(arena_backend.cmd_str(arena_backend.scope_indices(Scope::Local)[0]), "cargo run");
+    assert_eq!(
+        arena_backend.cmd_str(arena_backend.scope_indices(Scope::Local)[0]),
+        "cargo run"
+    );
 }
 
 #[test]
@@ -78,28 +111,38 @@ fn e2e_security_and_privacy_policy() {
 
     // 1. Excluded commands: exit, clear
     let mut cmd_exit = Command::cargo_bin("xstory").expect("binary");
-    cmd_exit.env("XSTORY_HISTORY_PATH", &history_path)
+    cmd_exit
+        .env("XSTORY_HISTORY_PATH", &history_path)
         .args(["record", "exit", "--exit=0", "--duration=10"])
         .assert()
         .success();
 
     let mut cmd_clear = Command::cargo_bin("xstory").expect("binary");
-    cmd_clear.env("XSTORY_HISTORY_PATH", &history_path)
+    cmd_clear
+        .env("XSTORY_HISTORY_PATH", &history_path)
         .args(["record", "clear", "--exit=0", "--duration=10"])
         .assert()
         .success();
 
     // 2. Ignorespace command
     let mut cmd_space = Command::cargo_bin("xstory").expect("binary");
-    cmd_space.env("XSTORY_HISTORY_PATH", &history_path)
+    cmd_space
+        .env("XSTORY_HISTORY_PATH", &history_path)
         .args(["record", "--", " secret_command", "0", "10"])
         .assert()
         .success();
 
     // 3. Secret masking: AWS_SECRET and --password
     let mut cmd_secret = Command::cargo_bin("xstory").expect("binary");
-    cmd_secret.env("XSTORY_HISTORY_PATH", &history_path)
-        .args(["record", "curl", "--password", "supersecret123", "https://api.internal"])
+    cmd_secret
+        .env("XSTORY_HISTORY_PATH", &history_path)
+        .args([
+            "record",
+            "curl",
+            "--password",
+            "supersecret123",
+            "https://api.internal",
+        ])
         .assert()
         .success();
 

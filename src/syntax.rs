@@ -1,11 +1,11 @@
 //! Tree-sitter bash syntax highlighting and token cache.
 //! Direct-mapped cache for zero-realloc AST tokenization.
 
-use std::cell::RefCell;
 use ratatui::style::{Color, Modifier, Style};
+use std::cell::RefCell;
 use tree_sitter::{Node, Parser};
 
-use crate::arena::{fnv1a, Theme};
+use crate::arena::{Theme, fnv1a};
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -13,8 +13,8 @@ use crate::arena::{fnv1a, Theme};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Span {
     pub start: u16,
-    pub end:   u16,
-    pub kind:  TokenKind,
+    pub end: u16,
+    pub kind: TokenKind,
 }
 
 /// Bash token categories for coloring.
@@ -40,7 +40,9 @@ impl<const N: usize> AstCache<N> {
     #[must_use]
     pub fn new() -> Self {
         let v: Vec<(u64, Vec<Span>)> = (0..N).map(|_| (0, Vec::new())).collect();
-        let Ok(slots) = v.into_boxed_slice().try_into() else { unreachable!() };
+        let Ok(slots) = v.into_boxed_slice().try_into() else {
+            unreachable!()
+        };
         Self { slots }
     }
 
@@ -91,7 +93,9 @@ thread_local! {
 #[allow(clippy::cast_possible_truncation)]
 fn collect_spans(node: Node<'_>, cmd: &[u8], spans: &mut Vec<Span>) {
     let (sb, eb) = (node.start_byte(), node.end_byte());
-    if sb >= eb || eb > u16::MAX as usize { return; }
+    if sb >= eb || eb > u16::MAX as usize {
+        return;
+    }
     let (start, end) = (sb as u16, eb as u16);
 
     let kind = match node.kind() {
@@ -99,8 +103,13 @@ fn collect_spans(node: Node<'_>, cmd: &[u8], spans: &mut Vec<Span>) {
         "comment" => Some(TokenKind::Comment),
         "string" | "raw_string" | "heredoc_body" | "heredoc_start" => Some(TokenKind::String),
         "variable_name" | "simple_expansion" | "expansion" => Some(TokenKind::Variable),
-        "|" | "||" | "&&" | "&" | ";" | ";;" | ">" | ">>" | "<" | "<<" | "<<<" | ">&" | "<&" | "|&" | "$" => Some(TokenKind::Operator),
-        "word" => Some(if cmd[sb..eb].starts_with(b"-") { TokenKind::Flag } else { TokenKind::Plain }),
+        "|" | "||" | "&&" | "&" | ";" | ";;" | ">" | ">>" | "<" | "<<" | "<<<" | ">&" | "<&"
+        | "|&" | "$" => Some(TokenKind::Operator),
+        "word" => Some(if cmd[sb..eb].starts_with(b"-") {
+            TokenKind::Flag
+        } else {
+            TokenKind::Plain
+        }),
         _ => None,
     };
 
@@ -227,7 +236,10 @@ mod tests {
         let mut cache = TokenCache::new();
         let cmd = "echo test";
         let _ = tokenize(&mut cache, cmd);
-        let h = match fnv1a(cmd.as_bytes()) { 0 => 1, o => o };
+        let h = match fnv1a(cmd.as_bytes()) {
+            0 => 1,
+            o => o,
+        };
         let slot = (h as usize) & (2048 - 1);
         assert_eq!(cache.slots[slot].0, h);
         assert!(!cache.slots[slot].1.is_empty());
@@ -237,7 +249,11 @@ mod tests {
 
         // Calling tokenize again must return the mutated span from cache, not re-parse into Command
         let spans = tokenize(&mut cache, cmd);
-        assert_eq!(spans[0].kind, TokenKind::Comment, "must return cached span without re-parsing");
+        assert_eq!(
+            spans[0].kind,
+            TokenKind::Comment,
+            "must return cached span without re-parsing"
+        );
     }
 
     #[test]
@@ -253,12 +269,18 @@ mod tests {
 
         for i in 0..1000 {
             let str_a = format!("cmd_a_{i}");
-            let h_a = match fnv1a(str_a.as_bytes()) { 0 => 1, o => o };
+            let h_a = match fnv1a(str_a.as_bytes()) {
+                0 => 1,
+                o => o,
+            };
             let slot_a = (h_a as usize) & (128 - 1);
 
             for j in (i + 1)..1000 {
                 let str_b = format!("cmd_b_{j}");
-                let h_b = match fnv1a(str_b.as_bytes()) { 0 => 1, o => o };
+                let h_b = match fnv1a(str_b.as_bytes()) {
+                    0 => 1,
+                    o => o,
+                };
                 let slot_b = (h_b as usize) & (128 - 1);
 
                 if slot_a == slot_b && h_a != h_b {
@@ -275,8 +297,14 @@ mod tests {
         }
 
         assert!(found, "should find two strings mapping to same slot");
-        let h1 = match fnv1a(s1.as_bytes()) { 0 => 1, o => o };
-        let h2 = match fnv1a(s2.as_bytes()) { 0 => 1, o => o };
+        let h1 = match fnv1a(s1.as_bytes()) {
+            0 => 1,
+            o => o,
+        };
+        let h2 = match fnv1a(s2.as_bytes()) {
+            0 => 1,
+            o => o,
+        };
 
         let _ = preview(&mut cache, &s1);
         assert_eq!(cache.slots[target_slot].0, h1);

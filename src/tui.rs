@@ -5,11 +5,11 @@ use std::cell::RefCell;
 use std::io::Write;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap};
-use ratatui::Frame;
 
 use crate::arena::{Arena, Config, PreviewMode, Scope, Theme};
 use crate::error::Error;
@@ -37,30 +37,30 @@ pub enum FocusedPanel {
 /// The entire TUI state. Owned by `run_tui`, mutated in-place.
 pub struct Dashboard<'a> {
     // --- input ---
-    pub query:           String,
-    pub cursor:          usize,
+    pub query: String,
+    pub cursor: usize,
 
     // --- focus ---
-    pub focus:           FocusedPanel,
+    pub focus: FocusedPanel,
 
     // --- search ---
-    pub scope:           Scope,
-    pub result:          SearchResult<'a>,
-    pub dedup_total:     usize,
+    pub scope: Scope,
+    pub result: SearchResult<'a>,
+    pub dedup_total: usize,
 
     // --- navigation ---
-    pub selected:        usize,
+    pub selected: usize,
     pub viewport_offset: usize,
-    pub preview_scroll:  usize,
-    pub preview_mode:    PreviewMode,
+    pub preview_scroll: usize,
+    pub preview_mode: PreviewMode,
 
     // --- display ---
-    pub theme:           Theme,
-    pub width:           u16,
-    pub height:          u16,
+    pub theme: Theme,
+    pub width: u16,
+    pub height: u16,
 
     // --- frame buffer ---
-    pub dirty:           bool,
+    pub dirty: bool,
 }
 
 impl<'a> Dashboard<'a> {
@@ -97,7 +97,10 @@ impl<'a> Dashboard<'a> {
 
     #[inline]
     fn char_to_byte(&self, char_idx: usize) -> usize {
-        self.query.char_indices().nth(char_idx).map_or(self.query.len(), |(i, _)| i)
+        self.query
+            .char_indices()
+            .nth(char_idx)
+            .map_or(self.query.len(), |(i, _)| i)
     }
 
     /// Insert a character at current cursor position (UTF-8 safe).
@@ -110,7 +113,10 @@ impl<'a> Dashboard<'a> {
     /// Delete character immediately before the cursor (UTF-8 safe).
     pub fn delete_char_before(&mut self) {
         if self.cursor > 0 {
-            let (s, e) = (self.char_to_byte(self.cursor - 1), self.char_to_byte(self.cursor));
+            let (s, e) = (
+                self.char_to_byte(self.cursor - 1),
+                self.char_to_byte(self.cursor),
+            );
             self.query.drain(s..e);
             self.cursor -= 1;
         }
@@ -127,7 +133,9 @@ impl<'a> Dashboard<'a> {
 
     /// Delete previous word before cursor (Ctrl-W).
     pub fn delete_word_before(&mut self) {
-        if self.cursor == 0 { return; }
+        if self.cursor == 0 {
+            return;
+        }
         let end = self.char_to_byte(self.cursor);
         let prefix = &self.query[..end];
         let trimmed = prefix.trim_end();
@@ -147,10 +155,18 @@ impl<'a> Dashboard<'a> {
         self.dirty = true;
     }
 
-    pub const fn move_cursor_left(&mut self) { self.cursor = self.cursor.saturating_sub(1); }
-    pub fn move_cursor_right(&mut self) { self.cursor = (self.cursor + 1).min(self.query.chars().count()); }
-    pub const fn move_cursor_home(&mut self) { self.cursor = 0; }
-    pub fn move_cursor_end(&mut self) { self.cursor = self.query.chars().count(); }
+    pub const fn move_cursor_left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+    pub fn move_cursor_right(&mut self) {
+        self.cursor = (self.cursor + 1).min(self.query.chars().count());
+    }
+    pub const fn move_cursor_home(&mut self) {
+        self.cursor = 0;
+    }
+    pub fn move_cursor_end(&mut self) {
+        self.cursor = self.query.chars().count();
+    }
 
     /// Move selection index up or down with saturation.
     pub fn move_selection(&mut self, delta: isize) {
@@ -201,11 +217,16 @@ impl<'a> Dashboard<'a> {
             self.preview_scroll.saturating_sub(delta.unsigned_abs())
         } else {
             #[allow(clippy::cast_sign_loss)]
-            self.preview_scroll.saturating_add(delta as usize).min(max_lines.saturating_sub(1))
+            self.preview_scroll
+                .saturating_add(delta as usize)
+                .min(max_lines.saturating_sub(1))
         };
     }
 
-    pub const fn resize(&mut self, w: u16, h: u16) { self.width = w; self.height = h; }
+    pub const fn resize(&mut self, w: u16, h: u16) {
+        self.width = w;
+        self.height = h;
+    }
 
     /// Get command string for current selection if present.
     #[must_use]
@@ -226,7 +247,9 @@ impl<'a> Dashboard<'a> {
                 }
             }
             PreviewMode::Dynamic => {
-                let max_preview_h = (area_height / 2).clamp(6, 20).min(area_height.saturating_sub(8));
+                let max_preview_h = (area_height / 2)
+                    .clamp(6, 20)
+                    .min(area_height.saturating_sub(8));
                 let cmd = self.selected_command(arena);
                 calc_preview_height(cmd.as_deref(), area_width, max_preview_h)
             }
@@ -273,18 +296,31 @@ pub fn detect_theme() -> Theme {
 
 // ── Terminal Setup & Teardown ────────────────────────────────────
 
-fn setup_terminal() -> Result<ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stderr>>, Error> {
+fn setup_terminal()
+-> Result<ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stderr>>, Error> {
     crossterm::terminal::enable_raw_mode()?;
     let mut stderr = std::io::stderr();
-    crossterm::execute!(stderr, crossterm::terminal::EnterAlternateScreen, crossterm::cursor::Hide, crossterm::event::EnableMouseCapture)?;
-    Ok(ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stderr))?)
+    crossterm::execute!(
+        stderr,
+        crossterm::terminal::EnterAlternateScreen,
+        crossterm::cursor::Hide,
+        crossterm::event::EnableMouseCapture
+    )?;
+    Ok(ratatui::Terminal::new(
+        ratatui::backend::CrosstermBackend::new(stderr),
+    )?)
 }
 
 /// Reset terminal state back to normal mode (crossterm).
 pub fn reset_terminal() {
     let _ = crossterm::terminal::disable_raw_mode();
     let mut stderr = std::io::stderr();
-    let _ = crossterm::execute!(stderr, crossterm::event::DisableMouseCapture, crossterm::cursor::Show, crossterm::terminal::LeaveAlternateScreen);
+    let _ = crossterm::execute!(
+        stderr,
+        crossterm::event::DisableMouseCapture,
+        crossterm::cursor::Show,
+        crossterm::terminal::LeaveAlternateScreen
+    );
     let _ = stderr.flush();
 }
 
@@ -297,12 +333,16 @@ fn restore_terminal(
 
 // ── Formatting Helpers ───────────────────────────────────────────
 
-const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #[must_use]
 pub fn format_timestamp(timestamp_ms: i64) -> String {
-    if timestamp_ms <= 0 { return "--:--".to_owned(); }
+    if timestamp_ms <= 0 {
+        return "--:--".to_owned();
+    }
     let (secs, day_sec) = (timestamp_ms / 1000, (timestamp_ms / 1000) % 86400);
     let (hour, min) = (day_sec / 3600, (day_sec % 3600) / 60);
 
@@ -323,8 +363,12 @@ fn abbreviate_path(path: &str) -> String {
         return String::new();
     }
     if let Ok(home) = std::env::var("HOME") {
-        if path == home { return "~".to_owned(); }
-        if let Some(stripped) = path.strip_prefix(&home) && stripped.starts_with('/') {
+        if path == home {
+            return "~".to_owned();
+        }
+        if let Some(stripped) = path.strip_prefix(&home)
+            && stripped.starts_with('/')
+        {
             return format!("~{stripped}");
         }
     }
@@ -372,7 +416,7 @@ pub struct MasterLayout {
     pub actions: Rect,
     pub history: Rect,
     pub preview: Rect,
-    pub query:   Rect,
+    pub query: Rect,
 }
 
 /// Count wrapped visual rows for text inside a bounded width.
@@ -396,7 +440,8 @@ pub fn calc_preview_height(command: Option<&str>, width: u16, max_height: u16) -
     match command {
         Some(cmd) if !cmd.trim().is_empty() => {
             let inner_width = width.saturating_sub(6).max(1);
-            let total_lines = u16::try_from(count_wrapped_rows(cmd, inner_width)).unwrap_or(u16::MAX);
+            let total_lines =
+                u16::try_from(count_wrapped_rows(cmd, inner_width)).unwrap_or(u16::MAX);
             let max_content = max_height.saturating_sub(2);
             total_lines.clamp(1, max_content) + 2
         }
@@ -430,7 +475,7 @@ pub fn compute_master_layout(area: Rect, preview_height: u16) -> MasterLayout {
         actions: chunks[1],
         history: chunks[2],
         preview: chunks[3],
-        query:   chunks[4],
+        query: chunks[4],
     }
 }
 
@@ -456,20 +501,45 @@ pub fn create_panel_block(focused: bool) -> Block<'static> {
 }
 
 impl MasterLayout {
-    #[must_use] pub fn history_inner(self) -> Rect { create_panel_block(false).padding(Padding::new(0, 1, 0, 0)).inner(self.history) }
-    #[must_use] pub fn preview_inner(self) -> Rect { create_panel_block(false).padding(Padding::horizontal(1)).inner(self.preview) }
-    #[must_use] pub fn query_inner(self) -> Rect { create_panel_block(false).padding(Padding::horizontal(1)).inner(self.query) }
+    #[must_use]
+    pub fn history_inner(self) -> Rect {
+        create_panel_block(false)
+            .padding(Padding::new(0, 1, 0, 0))
+            .inner(self.history)
+    }
+    #[must_use]
+    pub fn preview_inner(self) -> Rect {
+        create_panel_block(false)
+            .padding(Padding::horizontal(1))
+            .inner(self.preview)
+    }
+    #[must_use]
+    pub fn query_inner(self) -> Rect {
+        create_panel_block(false)
+            .padding(Padding::horizontal(1))
+            .inner(self.query)
+    }
 }
 
 #[inline]
 const fn in_rect(col: u16, row: u16, rect: Rect) -> bool {
-    col >= rect.x && col < rect.x.saturating_add(rect.width) && row >= rect.y && row < rect.y.saturating_add(rect.height)
+    col >= rect.x
+        && col < rect.x.saturating_add(rect.width)
+        && row >= rect.y
+        && row < rect.y.saturating_add(rect.height)
 }
 
-fn bracketed<'a>(inner: impl Into<std::borrow::Cow<'a, str>>, border_color: Color) -> Vec<Span<'a>> {
+fn bracketed<'a>(
+    inner: impl Into<std::borrow::Cow<'a, str>>,
+    border_color: Color,
+) -> Vec<Span<'a>> {
     let b = Style::default().fg(border_color);
     let val = Style::default().fg(Color::Indexed(243));
-    vec![Span::styled("[", b), Span::styled(inner, val), Span::styled("]", b)]
+    vec![
+        Span::styled("[", b),
+        Span::styled(inner, val),
+        Span::styled("]", b),
+    ]
 }
 
 /// Static whitespace buffer in `.rodata` for zero-allocation row padding.
@@ -499,11 +569,17 @@ fn split_spans_into_lines<'a>(spans: Vec<Span<'a>>) -> Vec<Line<'a>> {
             std::borrow::Cow::Owned(_) => "",
         };
         for (i, part) in text.split('\n').enumerate() {
-            if i > 0 { lines.push(Line::from(std::mem::take(&mut cur))); }
-            if !part.is_empty() { cur.push(Span::styled(part, span.style)); }
+            if i > 0 {
+                lines.push(Line::from(std::mem::take(&mut cur)));
+            }
+            if !part.is_empty() {
+                cur.push(Span::styled(part, span.style));
+            }
         }
     }
-    if !cur.is_empty() || lines.is_empty() { lines.push(Line::from(cur)); }
+    if !cur.is_empty() || lines.is_empty() {
+        lines.push(Line::from(cur));
+    }
     lines
 }
 
@@ -546,7 +622,10 @@ fn build_highlighted_spans<'a>(
                 out.push(Span::styled(&cmd[cursor..s], default_style));
             }
             if s < e {
-                out.push(Span::styled(&cmd[s..e], syntax::style_for(span.kind, theme)));
+                out.push(Span::styled(
+                    &cmd[s..e],
+                    syntax::style_for(span.kind, theme),
+                ));
             }
             cursor = cursor.max(e);
         }
@@ -588,7 +667,9 @@ fn build_highlighted_spans<'a>(
                             }
                         }
                         if t_idx == t_bytes.len() {
-                            let match_style = Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD);
+                            let match_style = Style::default()
+                                .fg(Color::Indexed(215))
+                                .add_modifier(Modifier::BOLD);
                             for &idx in matches.iter() {
                                 styles[idx] = match_style;
                             }
@@ -629,8 +710,14 @@ fn build_highlighted_spans<'a>(
             // 1. AST syntax token layer
             for span in spans {
                 let (s_b, e_b) = (span.start as usize, span.end as usize);
-                let s_c = char_offsets.binary_search_by_key(&s_b, |&(b, _)| b).unwrap_or_else(|i| i).min(char_count);
-                let e_c = char_offsets.binary_search_by_key(&e_b, |&(b, _)| b).unwrap_or_else(|i| i).min(char_count);
+                let s_c = char_offsets
+                    .binary_search_by_key(&s_b, |&(b, _)| b)
+                    .unwrap_or_else(|i| i)
+                    .min(char_count);
+                let e_c = char_offsets
+                    .binary_search_by_key(&e_b, |&(b, _)| b)
+                    .unwrap_or_else(|i| i)
+                    .min(char_count);
                 char_styles[s_c..e_c].fill(syntax::style_for(span.kind, theme));
             }
 
@@ -646,14 +733,17 @@ fn build_highlighted_spans<'a>(
                             let mut q_idx = 0;
                             for (t_idx, &(_, ch)) in char_offsets.iter().enumerate() {
                                 if q_idx < q_chars.len()
-                                    && (ch.eq_ignore_ascii_case(&q_chars[q_idx]) || ch.to_lowercase().eq(q_chars[q_idx].to_lowercase()))
+                                    && (ch.eq_ignore_ascii_case(&q_chars[q_idx])
+                                        || ch.to_lowercase().eq(q_chars[q_idx].to_lowercase()))
                                 {
                                     matches.push(t_idx);
                                     q_idx += 1;
                                 }
                             }
                             if q_idx == q_chars.len() {
-                                let match_style = Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD);
+                                let match_style = Style::default()
+                                    .fg(Color::Indexed(215))
+                                    .add_modifier(Modifier::BOLD);
                                 for &idx in matches.iter() {
                                     if idx < char_styles.len() {
                                         char_styles[idx] = match_style;
@@ -675,7 +765,11 @@ fn build_highlighted_spans<'a>(
                     j += 1;
                 }
                 let b_start = char_offsets[i].0;
-                let b_end = if j < char_count { char_offsets[j].0 } else { cmd.len() };
+                let b_end = if j < char_count {
+                    char_offsets[j].0
+                } else {
+                    cmd.len()
+                };
                 if let Some(slice) = cmd.get(b_start..b_end) {
                     out.push(Span::styled(slice, style));
                 }
@@ -703,21 +797,47 @@ pub fn render_frame(
     }
 
     // 1. Action Buttons
-    let items = [("[Esc]", " Exit"), ("[^R]", " Scope"), ("[↵]", " Run"), ("[Tab]", " Edit")];
-    let header_spans: Vec<Span<'_>> = items.iter().enumerate().flat_map(|(i, (k, d))| {
-        let mut v = Vec::new();
-        if i > 0 { v.push(Span::raw("   ")); }
-        v.push(Span::styled(*k, Style::default().fg(Color::Indexed(241))));
-        v.push(Span::styled(*d, Style::default().fg(Color::Indexed(241)).add_modifier(Modifier::ITALIC)));
-        v
-    }).collect();
-    f.render_widget(Line::from(header_spans).alignment(Alignment::Center), layout.actions);
+    let items = [
+        ("[Esc]", " Exit"),
+        ("[^R]", " Scope"),
+        ("[↵]", " Run"),
+        ("[Tab]", " Edit"),
+    ];
+    let header_spans: Vec<Span<'_>> = items
+        .iter()
+        .enumerate()
+        .flat_map(|(i, (k, d))| {
+            let mut v = Vec::new();
+            if i > 0 {
+                v.push(Span::raw("   "));
+            }
+            v.push(Span::styled(*k, Style::default().fg(Color::Indexed(241))));
+            v.push(Span::styled(
+                *d,
+                Style::default()
+                    .fg(Color::Indexed(241))
+                    .add_modifier(Modifier::ITALIC),
+            ));
+            v
+        })
+        .collect();
+    f.render_widget(
+        Line::from(header_spans).alignment(Alignment::Center),
+        layout.actions,
+    );
 
     // 2. History List
     let history_focus = dash.focus == FocusedPanel::History;
-    let scope_char = match dash.scope { Scope::Local => "L", Scope::Global => "G" };
+    let scope_char = match dash.scope {
+        Scope::Local => "L",
+        Scope::Global => "G",
+    };
     let total = dash.result.indices.len();
-    let current = if total == 0 { 0 } else { dash.selected.min(total.saturating_sub(1)) + 1 };
+    let current = if total == 0 {
+        0
+    } else {
+        dash.selected.min(total.saturating_sub(1)) + 1
+    };
     let count_str = format!("{}/{}", format_thousands(current), format_thousands(total));
 
     let h_border = panel_border_color(history_focus);
@@ -728,37 +848,66 @@ pub fn render_frame(
 
     let h_inner = history_block.inner(layout.history);
     let (h_h, h_w) = (h_inner.height as usize, h_inner.width as usize);
-    let sel_bg = match dash.theme { Theme::Dark => Color::Indexed(237), Theme::Light => Color::Gray };
+    let sel_bg = match dash.theme {
+        Theme::Dark => Color::Indexed(237),
+        Theme::Light => Color::Gray,
+    };
 
-    let history_lines: Vec<Line<'_>> = (0..h_h).map(|row_idx| {
-        let from_bottom = h_h.saturating_sub(1).saturating_sub(row_idx);
-        let item_idx = dash.viewport_offset + from_bottom;
-        if item_idx >= dash.result.indices.len() { return Line::raw(""); }
-        let cmd = arena.cmd_str(dash.result.indices[item_idx]);
-        let is_selected = item_idx == dash.selected;
-        let mut spans = Vec::new();
-        spans.push(if is_selected {
-            Span::styled("> ", Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD))
-        } else {
-            Span::raw("  ")
-        });
-        spans.extend(build_highlighted_spans(cmd, syntax::tokenize(token_cache, cmd), dash.theme, Some(&dash.query)));
-        let used_width = 2 + cmd.chars().count();
-        let needed = h_w.saturating_sub(used_width);
-        if needed > 0 {
-            let pad = needed.min(SPACES.len());
-            spans.push(Span::raw(&SPACES[..pad]));
-        }
-        if is_selected { for s in &mut spans { s.style = s.style.bg(sel_bg); } }
-        Line::from(spans)
-    }).collect();
-    f.render_widget(Paragraph::new(history_lines).block(history_block), layout.history);
+    let history_lines: Vec<Line<'_>> = (0..h_h)
+        .map(|row_idx| {
+            let from_bottom = h_h.saturating_sub(1).saturating_sub(row_idx);
+            let item_idx = dash.viewport_offset + from_bottom;
+            if item_idx >= dash.result.indices.len() {
+                return Line::raw("");
+            }
+            let cmd = arena.cmd_str(dash.result.indices[item_idx]);
+            let is_selected = item_idx == dash.selected;
+            let mut spans = Vec::new();
+            spans.push(if is_selected {
+                Span::styled(
+                    "> ",
+                    Style::default()
+                        .fg(Color::Indexed(215))
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::raw("  ")
+            });
+            spans.extend(build_highlighted_spans(
+                cmd,
+                syntax::tokenize(token_cache, cmd),
+                dash.theme,
+                Some(&dash.query),
+            ));
+            let used_width = 2 + cmd.chars().count();
+            let needed = h_w.saturating_sub(used_width);
+            if needed > 0 {
+                let pad = needed.min(SPACES.len());
+                spans.push(Span::raw(&SPACES[..pad]));
+            }
+            if is_selected {
+                for s in &mut spans {
+                    s.style = s.style.bg(sel_bg);
+                }
+            }
+            Line::from(spans)
+        })
+        .collect();
+    f.render_widget(
+        Paragraph::new(history_lines).block(history_block),
+        layout.history,
+    );
 
     // 3. Preview Box
     let preview_focus = dash.focus == FocusedPanel::Preview;
     let (time_str, path_str) = dash.result.indices.get(dash.selected).map_or_else(
         || ("--:--".to_owned(), String::new()),
-        |&idx| (format_timestamp(arena.timestamps[idx as usize]), abbreviate_path(arena.cwd_str(idx))),
+        |&idx| {
+            (
+                format_timestamp(arena.timestamps[idx as usize]),
+                abbreviate_path(arena.cwd_str(idx)),
+            )
+        },
     );
     let p_border = panel_border_color(preview_focus);
     let mut preview_block = create_panel_block(preview_focus)
@@ -770,15 +919,20 @@ pub fn render_frame(
         let avail = p_inner_w.saturating_sub(18);
         if avail >= 4 {
             let fitted = fit_path(&path_str, avail);
-            preview_block = preview_block.title_top(Line::from(bracketed(fitted, p_border)).alignment(Alignment::Right));
+            preview_block = preview_block
+                .title_top(Line::from(bracketed(fitted, p_border)).alignment(Alignment::Right));
         }
     }
 
-    let preview_lines = dash.result.indices.get(dash.selected).map_or_else(Vec::new, |&idx| {
-        let cmd = arena.cmd_str(idx);
-        let spans = syntax::preview(preview_cache, cmd);
-        split_spans_into_lines(build_highlighted_spans(cmd, spans, dash.theme, None))
-    });
+    let preview_lines = dash
+        .result
+        .indices
+        .get(dash.selected)
+        .map_or_else(Vec::new, |&idx| {
+            let cmd = arena.cmd_str(idx);
+            let spans = syntax::preview(preview_cache, cmd);
+            split_spans_into_lines(build_highlighted_spans(cmd, spans, dash.theme, None))
+        });
 
     let p_inner = preview_block.inner(layout.preview);
     let visual_rows = dash.result.indices.get(dash.selected).map_or(0, |&idx| {
@@ -792,25 +946,38 @@ pub fn render_frame(
 
     if visual_rows > p_inner.height as usize {
         let scroll_str = format!("{}/{} • Shift+↓/↑", p_scroll + 1, visual_rows);
-        preview_block = preview_block.title_bottom(Line::from(bracketed(scroll_str, p_border)).alignment(Alignment::Right));
+        preview_block = preview_block
+            .title_bottom(Line::from(bracketed(scroll_str, p_border)).alignment(Alignment::Right));
     }
-    f.render_widget(Paragraph::new(preview_lines).block(preview_block).wrap(Wrap { trim: false }).scroll((p_scroll, 0)), layout.preview);
+    f.render_widget(
+        Paragraph::new(preview_lines)
+            .block(preview_block)
+            .wrap(Wrap { trim: false })
+            .scroll((p_scroll, 0)),
+        layout.preview,
+    );
 
     // 4. Search Query Box
     let query_focus = dash.focus == FocusedPanel::Query;
     let query_block = create_panel_block(query_focus).padding(Padding::horizontal(1));
     let q_inner = query_block.inner(layout.query);
     let line = if dash.query.is_empty() {
-        Line::from(vec![Span::styled("", Style::default().fg(Color::Indexed(241)))])
+        Line::from(vec![Span::styled(
+            "",
+            Style::default().fg(Color::Indexed(241)),
+        )])
     } else {
         Line::from(vec![Span::raw(&dash.query)])
     };
     f.render_widget(Paragraph::new(line).block(query_block), layout.query);
 
     #[allow(clippy::cast_possible_truncation)]
-    let cursor_offset = if dash.query.is_empty() { 1 } else { dash.cursor as u16 };
-    let cursor_x = (q_inner.x + cursor_offset)
-        .min(q_inner.x + q_inner.width.saturating_sub(1));
+    let cursor_offset = if dash.query.is_empty() {
+        1
+    } else {
+        dash.cursor as u16
+    };
+    let cursor_x = (q_inner.x + cursor_offset).min(q_inner.x + q_inner.width.saturating_sub(1));
     f.set_cursor_position((cursor_x, q_inner.y));
 }
 
@@ -844,30 +1011,86 @@ pub fn run_tui(
             dash.update_viewport(visible_rows, config.scroll_off);
 
             terminal.draw(|f| {
-                render_frame(f, &dash, arena, &mut token_cache, &mut preview_cache, layout);
+                render_frame(
+                    f,
+                    &dash,
+                    arena,
+                    &mut token_cache,
+                    &mut preview_cache,
+                    layout,
+                );
             })?;
             dash.dirty = false;
         }
 
         match crossterm::event::read()? {
-            Event::Key(KeyEvent { code, modifiers, .. }) => match (modifiers, code) {
-                (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => { dash.insert_char(c); dash.on_query_mutated(arena); }
-                (KeyModifiers::NONE, KeyCode::Backspace) => { dash.delete_char_before(); dash.on_query_mutated(arena); }
-                (KeyModifiers::CONTROL, KeyCode::Char('u')) => { dash.delete_to_start(); dash.on_query_mutated(arena); }
-                (KeyModifiers::CONTROL, KeyCode::Char('w')) => { dash.delete_word_before(); dash.on_query_mutated(arena); }
+            Event::Key(KeyEvent {
+                code, modifiers, ..
+            }) => match (modifiers, code) {
+                (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+                    dash.insert_char(c);
+                    dash.on_query_mutated(arena);
+                }
+                (KeyModifiers::NONE, KeyCode::Backspace) => {
+                    dash.delete_char_before();
+                    dash.on_query_mutated(arena);
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
+                    dash.delete_to_start();
+                    dash.on_query_mutated(arena);
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
+                    dash.delete_word_before();
+                    dash.on_query_mutated(arena);
+                }
                 (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
                     dash.toggle_scope();
                     dash.dedup_total = arena.scope_indices(dash.scope).len();
                     dash.on_query_mutated(arena);
                 }
-                (KeyModifiers::CONTROL, KeyCode::Char('a')) | (KeyModifiers::NONE, KeyCode::Home) => { dash.focus = FocusedPanel::Query; dash.move_cursor_home(); dash.dirty = true; }
-                (KeyModifiers::CONTROL, KeyCode::Char('e')) | (KeyModifiers::NONE, KeyCode::End) => { dash.focus = FocusedPanel::Query; dash.move_cursor_end(); dash.dirty = true; }
-                (KeyModifiers::NONE, KeyCode::Left) => { dash.focus = FocusedPanel::Query; dash.move_cursor_left(); dash.dirty = true; }
-                (KeyModifiers::NONE, KeyCode::Right) => { dash.focus = FocusedPanel::Query; dash.move_cursor_right(); dash.dirty = true; }
-                (KeyModifiers::CONTROL, KeyCode::Char('p')) | (KeyModifiers::NONE, KeyCode::Up) => { dash.focus = FocusedPanel::History; dash.move_selection(1); dash.dirty = true; }
-                (KeyModifiers::CONTROL, KeyCode::Char('n')) | (KeyModifiers::NONE, KeyCode::Down) => { dash.focus = FocusedPanel::History; dash.move_selection(-1); dash.dirty = true; }
-                (KeyModifiers::NONE, KeyCode::PageUp) => { dash.focus = FocusedPanel::History; dash.move_selection(10); dash.dirty = true; }
-                (KeyModifiers::NONE, KeyCode::PageDown) => { dash.focus = FocusedPanel::History; dash.move_selection(-10); dash.dirty = true; }
+                (KeyModifiers::CONTROL, KeyCode::Char('a'))
+                | (KeyModifiers::NONE, KeyCode::Home) => {
+                    dash.focus = FocusedPanel::Query;
+                    dash.move_cursor_home();
+                    dash.dirty = true;
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('e'))
+                | (KeyModifiers::NONE, KeyCode::End) => {
+                    dash.focus = FocusedPanel::Query;
+                    dash.move_cursor_end();
+                    dash.dirty = true;
+                }
+                (KeyModifiers::NONE, KeyCode::Left) => {
+                    dash.focus = FocusedPanel::Query;
+                    dash.move_cursor_left();
+                    dash.dirty = true;
+                }
+                (KeyModifiers::NONE, KeyCode::Right) => {
+                    dash.focus = FocusedPanel::Query;
+                    dash.move_cursor_right();
+                    dash.dirty = true;
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('p')) | (KeyModifiers::NONE, KeyCode::Up) => {
+                    dash.focus = FocusedPanel::History;
+                    dash.move_selection(1);
+                    dash.dirty = true;
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('n'))
+                | (KeyModifiers::NONE, KeyCode::Down) => {
+                    dash.focus = FocusedPanel::History;
+                    dash.move_selection(-1);
+                    dash.dirty = true;
+                }
+                (KeyModifiers::NONE, KeyCode::PageUp) => {
+                    dash.focus = FocusedPanel::History;
+                    dash.move_selection(10);
+                    dash.dirty = true;
+                }
+                (KeyModifiers::NONE, KeyCode::PageDown) => {
+                    dash.focus = FocusedPanel::History;
+                    dash.move_selection(-10);
+                    dash.dirty = true;
+                }
                 (KeyModifiers::SHIFT, KeyCode::Up) => {
                     dash.focus = FocusedPanel::Preview;
                     dash.scroll_preview(-1, 1000);
@@ -878,7 +1101,8 @@ pub fn run_tui(
                     dash.scroll_preview(1, 1000);
                     dash.dirty = true;
                 }
-                (KeyModifiers::CONTROL, KeyCode::Char('c' | 'd' | 'g')) | (KeyModifiers::NONE, KeyCode::Esc) => break Outcome::Cancel,
+                (KeyModifiers::CONTROL, KeyCode::Char('c' | 'd' | 'g'))
+                | (KeyModifiers::NONE, KeyCode::Esc) => break Outcome::Cancel,
                 (KeyModifiers::NONE, KeyCode::Enter) => {
                     let cmd = dash.selected_command(arena).or_else(|| {
                         let q = dash.query.trim();
@@ -887,8 +1111,14 @@ pub fn run_tui(
                     break cmd.map_or(Outcome::Cancel, Outcome::Execute);
                 }
                 (KeyModifiers::NONE, KeyCode::Tab) => {
-                    let cmd = dash.selected_command(arena).unwrap_or_else(|| dash.query.clone());
-                    break if cmd.trim().is_empty() { Outcome::Cancel } else { Outcome::Edit(cmd) };
+                    let cmd = dash
+                        .selected_command(arena)
+                        .unwrap_or_else(|| dash.query.clone());
+                    break if cmd.trim().is_empty() {
+                        Outcome::Cancel
+                    } else {
+                        Outcome::Edit(cmd)
+                    };
                 }
                 _ => {}
             },
@@ -900,7 +1130,11 @@ pub fn run_tui(
 
                 match mouse.kind {
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                        let delta = if mouse.kind == MouseEventKind::ScrollUp { 1 } else { -1 };
+                        let delta = if mouse.kind == MouseEventKind::ScrollUp {
+                            1
+                        } else {
+                            -1
+                        };
                         if is_over_preview {
                             dash.focus = FocusedPanel::Preview;
                             dash.scroll_preview(-delta, 1000);
@@ -1040,10 +1274,7 @@ mod tests {
 
     #[test]
     fn scope_toggle_updates_search() {
-        let (_dir, arena) = make_test_arena(&[
-            "1000\t50\t0\t/home\tls",
-            "2000\t50\t0\t/tmp\tpwd",
-        ]);
+        let (_dir, arena) = make_test_arena(&["1000\t50\t0\t/home\tls", "2000\t50\t0\t/tmp\tpwd"]);
 
         let mut dash = Dashboard::new(Theme::Dark, 80, 24, None, &arena);
         assert_eq!(dash.scope, Scope::Global);
@@ -1083,10 +1314,14 @@ mod tests {
     fn selected_command_extraction() {
         let (_dir, arena) = make_test_arena(&["1000\t50\t0\t/home\tgit status"]);
         let dash = Dashboard::new(Theme::Dark, 80, 24, None, &arena);
-        assert_eq!(dash.selected_command(&arena), Some("git status".to_string()));
+        assert_eq!(
+            dash.selected_command(&arena),
+            Some("git status".to_string())
+        );
 
         let (_empty_dir, empty_arena) = make_test_arena(&[]);
-        let mut empty_dash = Dashboard::new(Theme::Dark, 80, 24, Some("fallback_cmd"), &empty_arena);
+        let mut empty_dash =
+            Dashboard::new(Theme::Dark, 80, 24, Some("fallback_cmd"), &empty_arena);
         empty_dash.result = SearchResult::empty();
         assert_eq!(empty_dash.selected_command(&empty_arena), None);
     }
@@ -1119,9 +1354,18 @@ mod tests {
         let layout = compute_master_layout(Rect::new(0, 0, 10, 3), 3);
         let backend = ratatui::backend::TestBackend::new(10, 3);
         let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
-        terminal.draw(|f| {
-            render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache, layout);
-        }).expect("draw");
+        terminal
+            .draw(|f| {
+                render_frame(
+                    f,
+                    &dash,
+                    &arena,
+                    &mut token_cache,
+                    &mut preview_cache,
+                    layout,
+                );
+            })
+            .expect("draw");
     }
 
     #[test]
@@ -1200,19 +1444,25 @@ mod tests {
         for span in &spans_no_query {
             assert_ne!(
                 span.style,
-                Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Indexed(215))
+                    .add_modifier(Modifier::BOLD),
                 "No span should have match highlight when query is None"
             );
         }
 
         // 2. With matching query: matched characters get Color::Yellow + BOLD overlay
-        let spans_with_query = build_highlighted_spans(cmd, spans_syntax, Theme::Dark, Some("commit"));
+        let spans_with_query =
+            build_highlighted_spans(cmd, spans_syntax, Theme::Dark, Some("commit"));
         let has_yellow_bold = spans_with_query.iter().any(|span| {
             span.style.fg == Some(Color::Indexed(215))
                 && span.style.add_modifier.contains(Modifier::BOLD)
                 && span.content == "commit"
         });
-        assert!(has_yellow_bold, "Expected 'commit' to be highlighted with Color::Yellow and BOLD");
+        assert!(
+            has_yellow_bold,
+            "Expected 'commit' to be highlighted with Color::Yellow and BOLD"
+        );
 
         // 3. Case-insensitive subsequence match
         let spans_case = build_highlighted_spans(cmd, spans_syntax, Theme::Dark, Some("GIT"));
@@ -1230,7 +1480,10 @@ mod tests {
                 && span.style.add_modifier.contains(Modifier::BOLD)
                 && span.content == "commit"
         });
-        assert!(has_prefix_match, "Expected stripped query '^commit' to match 'commit'");
+        assert!(
+            has_prefix_match,
+            "Expected stripped query '^commit' to match 'commit'"
+        );
     }
 
     #[test]
@@ -1278,7 +1531,14 @@ mod tests {
 
         terminal
             .draw(|f| {
-                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache, layout);
+                render_frame(
+                    f,
+                    &dash,
+                    &arena,
+                    &mut token_cache,
+                    &mut preview_cache,
+                    layout,
+                );
             })
             .expect("draw");
 
@@ -1308,14 +1568,27 @@ mod tests {
 
         terminal
             .draw(|f| {
-                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache, layout);
+                render_frame(
+                    f,
+                    &dash,
+                    &arena,
+                    &mut token_cache,
+                    &mut preview_cache,
+                    layout,
+                );
             })
             .expect("draw");
 
         let buffer2 = terminal.backend().buffer().clone();
         let mut row_above_bottom = String::new();
         for x in history_inner.x..history_inner.x + history_inner.width {
-            row_above_bottom.push(buffer2[(x, bottom_y - 1)].symbol().chars().next().unwrap_or(' '));
+            row_above_bottom.push(
+                buffer2[(x, bottom_y - 1)]
+                    .symbol()
+                    .chars()
+                    .next()
+                    .unwrap_or(' '),
+            );
         }
         assert!(
             row_above_bottom.contains('>'),
@@ -1350,9 +1623,8 @@ mod tests {
 
     #[test]
     fn dynamic_vs_fixed_preview_height() {
-        let (_dir, arena) = make_test_arena(&[
-            "1000\t50\t0\t/home\tline1\\nline2\\nline3\\nline4\\nline5",
-        ]);
+        let (_dir, arena) =
+            make_test_arena(&["1000\t50\t0\t/home\tline1\\nline2\\nline3\\nline4\\nline5"]);
         let mut dash = Dashboard::new(Theme::Dark, 80, 30, None, &arena);
 
         // Default is Dynamic: command has 5 lines -> 5 + 2 = 7 height
@@ -1390,7 +1662,14 @@ mod tests {
         // 1. When query is empty: prompt icon '' is displayed at q_inner.x, cursor is to the right at q_inner.x + 1
         terminal
             .draw(|f| {
-                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache, layout);
+                render_frame(
+                    f,
+                    &dash,
+                    &arena,
+                    &mut token_cache,
+                    &mut preview_cache,
+                    layout,
+                );
             })
             .expect("draw");
 
@@ -1414,7 +1693,14 @@ mod tests {
 
         terminal
             .draw(|f| {
-                render_frame(f, &dash, &arena, &mut token_cache, &mut preview_cache, layout);
+                render_frame(
+                    f,
+                    &dash,
+                    &arena,
+                    &mut token_cache,
+                    &mut preview_cache,
+                    layout,
+                );
             })
             .expect("draw");
 
@@ -1429,14 +1715,8 @@ mod tests {
             "c",
             "Typed text must start directly at q_inner.x, on that same spot"
         );
-        assert_eq!(
-            buffer_typed[(q_inner.x + 1, q_inner.y)].symbol(),
-            "m"
-        );
-        assert_eq!(
-            buffer_typed[(q_inner.x + 2, q_inner.y)].symbol(),
-            "d"
-        );
+        assert_eq!(buffer_typed[(q_inner.x + 1, q_inner.y)].symbol(), "m");
+        assert_eq!(buffer_typed[(q_inner.x + 2, q_inner.y)].symbol(), "d");
 
         let typed_cursor_pos = terminal.get_cursor_position().expect("cursor pos");
         assert_eq!(typed_cursor_pos.x, q_inner.x + 3);

@@ -7,7 +7,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::arena::{fnv1a, Config};
+use crate::arena::{Config, fnv1a};
 
 // ── Verdict ──────────────────────────────────────────────────────
 
@@ -26,9 +26,18 @@ fn escape_into(s: &str, buf: &mut Vec<u8>) -> bool {
     let mut escaped = false;
     for &b in s.as_bytes() {
         match b {
-            b'\t' => { buf.extend_from_slice(b"\\t"); escaped = true; }
-            b'\n' => { buf.extend_from_slice(b"\\n"); escaped = true; }
-            b'\\' => { buf.extend_from_slice(b"\\\\"); escaped = true; }
+            b'\t' => {
+                buf.extend_from_slice(b"\\t");
+                escaped = true;
+            }
+            b'\n' => {
+                buf.extend_from_slice(b"\\n");
+                escaped = true;
+            }
+            b'\\' => {
+                buf.extend_from_slice(b"\\\\");
+                escaped = true;
+            }
             _ => buf.push(b),
         }
     }
@@ -46,7 +55,11 @@ fn evaluate(cmd: &str, config: &Config) -> Verdict {
     if config.exclude_commands.iter().any(|excl| excl == base) {
         return Verdict::Deny;
     }
-    if config.secret_patterns.iter().any(|pat| cmd.contains(pat.as_str())) {
+    if config
+        .secret_patterns
+        .iter()
+        .any(|pat| cmd.contains(pat.as_str()))
+    {
         return Verdict::Mask;
     }
     Verdict::Allow
@@ -62,12 +75,16 @@ fn mask_command(cmd: &str, config: &Config) -> String {
             let rest = &masked[after_pat..];
             let end = if rest.starts_with('=') || rest.starts_with(':') {
                 let val_rest = &rest[1..];
-                let val_end = val_rest.find(|c: char| c.is_whitespace()).unwrap_or(val_rest.len());
+                let val_end = val_rest
+                    .find(|c: char| c.is_whitespace())
+                    .unwrap_or(val_rest.len());
                 1 + val_end
             } else if rest.starts_with(' ') {
                 let trimmed = rest.trim_start();
                 let spaces = rest.len() - trimmed.len();
-                let val_end = trimmed.find(|c: char| c.is_whitespace()).unwrap_or(trimmed.len());
+                let val_end = trimmed
+                    .find(|c: char| c.is_whitespace())
+                    .unwrap_or(trimmed.len());
                 spaces + val_end
             } else {
                 rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len())
@@ -97,9 +114,20 @@ pub fn record(
     cwd: Option<&str>,
     config: &Config,
 ) -> Result<(), crate::error::Error> {
-    let cwd_env = if cwd.is_none() { std::env::var("PWD").ok() } else { None };
+    let cwd_env = if cwd.is_none() {
+        std::env::var("PWD").ok()
+    } else {
+        None
+    };
     let cwd_ref = cwd.or(cwd_env.as_deref()).unwrap_or("?");
-    record_to_path(cmd_parts, exit_code, duration_ms, Some(cwd_ref), config, &config.history_path)
+    record_to_path(
+        cmd_parts,
+        exit_code,
+        duration_ms,
+        Some(cwd_ref),
+        config,
+        &config.history_path,
+    )
 }
 
 /// Record with explicit path override (for testing).
@@ -158,7 +186,10 @@ fn now_epoch_ms() -> i64 {
 
 #[must_use]
 pub fn detect_shell_history() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("HISTFILE").map(PathBuf::from).filter(|p| p.exists()) {
+    if let Some(p) = std::env::var_os("HISTFILE")
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
+    {
         return Some(p);
     }
     let h = PathBuf::from(std::env::var_os("HOME")?);
@@ -170,10 +201,15 @@ pub fn detect_shell_history() -> Option<PathBuf> {
     } else {
         ".zsh_history"
     };
-    [preferred, ".zsh_history", ".local/share/fish/fish_history", ".bash_history"]
-        .into_iter()
-        .map(|rel| h.join(rel))
-        .find(|p| p.exists())
+    [
+        preferred,
+        ".zsh_history",
+        ".local/share/fish/fish_history",
+        ".bash_history",
+    ]
+    .into_iter()
+    .map(|rel| h.join(rel))
+    .find(|p| p.exists())
 }
 
 /// In-place Zsh 0x83 unmetafy: zero allocations, instant SIMD skip on clean ASCII/UTF-8.
@@ -263,7 +299,10 @@ pub fn export_history_from_path(
             .open(p)?;
         file_writer = Some(BufWriter::with_capacity(64 * 1024, f));
     } else {
-        stdout_writer = Some(BufWriter::with_capacity(64 * 1024, std::io::stdout().lock()));
+        stdout_writer = Some(BufWriter::with_capacity(
+            64 * 1024,
+            std::io::stdout().lock(),
+        ));
     }
 
     if scope == crate::arena::Scope::Global {
@@ -310,7 +349,10 @@ pub fn export_history_from_path(
 ///
 /// # Errors
 /// Returns `Error::Io` or `Error::InvalidArgs` on failure.
-pub fn import_history(in_path: Option<&str>, config: &Config) -> Result<usize, crate::error::Error> {
+pub fn import_history(
+    in_path: Option<&str>,
+    config: &Config,
+) -> Result<usize, crate::error::Error> {
     import_history_to_path(in_path, config, &config.history_path)
 }
 
@@ -323,7 +365,14 @@ struct IngestCtx<'a> {
 }
 
 impl IngestCtx<'_> {
-    fn push(&mut self, ts_ms: i64, dur_ms: u64, exit: i32, cwd: &str, raw_cmd: &str) -> std::io::Result<()> {
+    fn push(
+        &mut self,
+        ts_ms: i64,
+        dur_ms: u64,
+        exit: i32,
+        cwd: &str,
+        raw_cmd: &str,
+    ) -> std::io::Result<()> {
         let masked;
         let final_cmd = match evaluate(raw_cmd, self.config) {
             Verdict::Deny => return Ok(()),
@@ -350,9 +399,18 @@ impl IngestCtx<'_> {
 
     fn push_tsv(&mut self, full: &[u8], unesc: &mut Vec<u8>) -> std::io::Result<()> {
         let mut p = full.splitn(5, |&b| b == b'\t');
-        let ts = p.next().and_then(|b| std::str::from_utf8(b).ok()?.parse().ok()).unwrap_or(0);
-        let dur = p.next().and_then(|b| std::str::from_utf8(b).ok()?.parse().ok()).unwrap_or(0);
-        let exit = p.next().and_then(|b| std::str::from_utf8(b).ok()?.parse().ok()).unwrap_or(0);
+        let ts = p
+            .next()
+            .and_then(|b| std::str::from_utf8(b).ok()?.parse().ok())
+            .unwrap_or(0);
+        let dur = p
+            .next()
+            .and_then(|b| std::str::from_utf8(b).ok()?.parse().ok())
+            .unwrap_or(0);
+        let exit = p
+            .next()
+            .and_then(|b| std::str::from_utf8(b).ok()?.parse().ok())
+            .unwrap_or(0);
         let raw_dir = p.next().unwrap_or(b"?");
         let raw_command = p.next().unwrap_or(b"");
         unescape_into(raw_dir, unesc);
@@ -367,7 +425,9 @@ impl IngestCtx<'_> {
 fn has_four_tabs(s: &[u8]) -> bool {
     let mut n = 0;
     for &b in s {
-        if b == b'\t' { n += 1; }
+        if b == b'\t' {
+            n += 1;
+        }
     }
     n == 4
 }
@@ -392,21 +452,32 @@ fn load_existing_hashes(target_path: &Path, unesc: &mut Vec<u8>) -> HashSet<u64>
 
 fn open_input_stream(in_path: Option<&str>) -> Result<InStream, crate::error::Error> {
     match in_path {
-        Some("-") => Ok(InStream::Stdin(BufReader::with_capacity(64 * 1024, std::io::stdin()))),
+        Some("-") => Ok(InStream::Stdin(BufReader::with_capacity(
+            64 * 1024,
+            std::io::stdin(),
+        ))),
         Some(p) => {
             let path = if p == "~" {
                 std::env::var_os("HOME").map_or_else(|| PathBuf::from(p), PathBuf::from)
             } else if let Some(stripped) = p.strip_prefix("~/") {
-                std::env::var_os("HOME").map_or_else(|| PathBuf::from(p), |h| PathBuf::from(h).join(stripped))
+                std::env::var_os("HOME")
+                    .map_or_else(|| PathBuf::from(p), |h| PathBuf::from(h).join(stripped))
             } else {
                 PathBuf::from(p)
             };
-            Ok(InStream::File(BufReader::with_capacity(64 * 1024, std::fs::File::open(path)?)))
+            Ok(InStream::File(BufReader::with_capacity(
+                64 * 1024,
+                std::fs::File::open(path)?,
+            )))
         }
         None => {
-            let p = detect_shell_history()
-                .ok_or(crate::error::Error::InvalidArgs("could not auto-detect shell history file"))?;
-            Ok(InStream::File(BufReader::with_capacity(64 * 1024, std::fs::File::open(p)?)))
+            let p = detect_shell_history().ok_or(crate::error::Error::InvalidArgs(
+                "could not auto-detect shell history file",
+            ))?;
+            Ok(InStream::File(BufReader::with_capacity(
+                64 * 1024,
+                std::fs::File::open(p)?,
+            )))
         }
     }
 }
@@ -456,8 +527,12 @@ pub fn import_history_to_path(
         if read_stream_line(&mut stream, &mut raw_line)? == 0 {
             break;
         }
-        if raw_line.ends_with(b"\n") { raw_line.pop(); }
-        if raw_line.ends_with(b"\r") { raw_line.pop(); }
+        if raw_line.ends_with(b"\n") {
+            raw_line.pop();
+        }
+        if raw_line.ends_with(b"\r") {
+            raw_line.pop();
+        }
         if raw_line.is_empty() && multi_buf.is_empty() {
             continue;
         }
@@ -476,9 +551,11 @@ pub fn import_history_to_path(
                 continue;
             } else if pending_fish.is_some() {
                 if let Some(w) = raw_line.strip_prefix(b"  when: ") {
-                    pending_ts = std::str::from_utf8(w).ok()
+                    pending_ts = std::str::from_utf8(w)
+                        .ok()
                         .and_then(|s| s.trim().parse::<i64>().ok())
-                        .unwrap_or(0) * 1000;
+                        .unwrap_or(0)
+                        * 1000;
                     continue;
                 }
                 // Discard file arguments (paths:) and other internal metadata
@@ -494,9 +571,11 @@ pub fn import_history_to_path(
             && (10..=14).contains(&raw_line.len())
             && raw_line[1..].iter().all(u8::is_ascii_digit)
         {
-            pending_ts = std::str::from_utf8(&raw_line[1..]).ok()
+            pending_ts = std::str::from_utf8(&raw_line[1..])
+                .ok()
                 .and_then(|s| s.parse::<i64>().ok())
-                .unwrap_or(0) * 1000;
+                .unwrap_or(0)
+                * 1000;
             continue;
         }
 
@@ -528,8 +607,16 @@ pub fn import_history_to_path(
             let header = &rest[..semi];
             let cmd = &rest[semi + 1..];
             let mut h = header.splitn(2, |&b| b == b':');
-            let ts = h.next().and_then(|s| std::str::from_utf8(s).ok()?.parse::<i64>().ok()).unwrap_or(0) * 1000;
-            let dur = h.next().and_then(|s| std::str::from_utf8(s).ok()?.parse::<u64>().ok()).unwrap_or(0) * 1000;
+            let ts = h
+                .next()
+                .and_then(|s| std::str::from_utf8(s).ok()?.parse::<i64>().ok())
+                .unwrap_or(0)
+                * 1000;
+            let dur = h
+                .next()
+                .and_then(|s| std::str::from_utf8(s).ok()?.parse::<u64>().ok())
+                .unwrap_or(0)
+                * 1000;
             ctx.push(ts, dur, 0, "?", &String::from_utf8_lossy(cmd))?;
             multi_buf.clear();
             continue;
@@ -561,7 +648,11 @@ mod tests {
             scroll_off: 4,
             preview_mode: crate::arena::PreviewMode::Dynamic,
             exclude_commands: vec!["exit".into(), "logout".into(), "clear".into()],
-            secret_patterns: vec!["AWS_SECRET".into(), "GITHUB_TOKEN".into(), "--password".into()],
+            secret_patterns: vec![
+                "AWS_SECRET".into(),
+                "GITHUB_TOKEN".into(),
+                "--password".into(),
+            ],
         }
     }
 
@@ -616,8 +707,13 @@ mod tests {
 
         record_to_path(
             &["export".into(), "AWS_SECRET_KEY=foo123".into()],
-            0, 100, Some("/home"), &cfg, &path,
-        ).expect("record");
+            0,
+            100,
+            Some("/home"),
+            &cfg,
+            &path,
+        )
+        .expect("record");
 
         let content = std::fs::read_to_string(&path).expect("read");
         assert!(!content.contains("AWS_SECRET_KEY=foo123"));
@@ -632,8 +728,13 @@ mod tests {
 
         record_to_path(
             &["echo".into(), "hello\tworld".into()],
-            0, 100, Some("/home"), &cfg, &path,
-        ).expect("record");
+            0,
+            100,
+            Some("/home"),
+            &cfg,
+            &path,
+        )
+        .expect("record");
 
         let content = std::fs::read_to_string(&path).expect("read");
         // Tabs in command should be escaped as \t literal
@@ -648,8 +749,13 @@ mod tests {
 
         record_to_path(
             &["echo".into(), "line1\nline2".into()],
-            0, 100, Some("/home"), &cfg, &path,
-        ).expect("record");
+            0,
+            100,
+            Some("/home"),
+            &cfg,
+            &path,
+        )
+        .expect("record");
 
         let content = std::fs::read_to_string(&path).expect("read");
         assert!(content.contains("line1\\nline2"));
@@ -663,8 +769,13 @@ mod tests {
 
         record_to_path(
             &["echo".into(), "path\\dir".into()],
-            0, 100, Some("/home"), &cfg, &path,
-        ).expect("record");
+            0,
+            100,
+            Some("/home"),
+            &cfg,
+            &path,
+        )
+        .expect("record");
 
         let content = std::fs::read_to_string(&path).expect("read");
         assert!(content.contains("path\\\\dir"));
@@ -693,8 +804,13 @@ mod tests {
 
         record_to_path(
             &["git".into(), "status".into()],
-            0, 250, Some("/home/user"), &cfg, &path,
-        ).expect("record");
+            0,
+            250,
+            Some("/home/user"),
+            &cfg,
+            &path,
+        )
+        .expect("record");
 
         let arena = crate::arena::Arena::load(&path, None).expect("load");
         assert_eq!(arena.len(), 1);
@@ -727,7 +843,15 @@ mod tests {
         let path = dir.path().join("history.tsv");
         let cfg = test_config(path.clone());
 
-        record_to_path(&["ls".into(), "-la".into()], 0, 100, Some("/home"), &cfg, &path).expect("record");
+        record_to_path(
+            &["ls".into(), "-la".into()],
+            0,
+            100,
+            Some("/home"),
+            &cfg,
+            &path,
+        )
+        .expect("record");
 
         let content = std::fs::read_to_string(&path).expect("read");
         assert!(!content.is_empty());
@@ -756,7 +880,8 @@ mod tests {
         std::fs::write(&src, content).expect("write");
 
         let cfg = test_config(hist.clone());
-        let count = import_history_to_path(Some(src.to_str().expect("path")), &cfg, &hist).expect("import");
+        let count =
+            import_history_to_path(Some(src.to_str().expect("path")), &cfg, &hist).expect("import");
         assert_eq!(count, 2);
 
         let arena = crate::arena::Arena::load(&hist, None).expect("load");
@@ -776,7 +901,8 @@ mod tests {
         std::fs::write(&src, content).expect("write");
 
         let cfg = test_config(hist.clone());
-        let count = import_history_to_path(Some(src.to_str().expect("path")), &cfg, &hist).expect("import");
+        let count =
+            import_history_to_path(Some(src.to_str().expect("path")), &cfg, &hist).expect("import");
         assert_eq!(count, 3);
 
         let arena = crate::arena::Arena::load(&hist, None).expect("load");
@@ -796,7 +922,8 @@ mod tests {
         std::fs::write(&src, content).expect("write");
 
         let cfg = test_config(hist.clone());
-        let count = import_history_to_path(Some(src.to_str().expect("path")), &cfg, &hist).expect("import");
+        let count =
+            import_history_to_path(Some(src.to_str().expect("path")), &cfg, &hist).expect("import");
         assert_eq!(count, 2);
 
         let arena = crate::arena::Arena::load(&hist, None).expect("load");
@@ -816,10 +943,12 @@ mod tests {
         std::fs::write(&src, content).expect("write");
 
         let cfg = test_config(hist.clone());
-        let count = import_history_to_path(Some(src.to_str().expect("path")), &cfg, &hist).expect("import");
+        let count =
+            import_history_to_path(Some(src.to_str().expect("path")), &cfg, &hist).expect("import");
         assert_eq!(count, 2);
 
-        let count2 = import_history_to_path(Some(src.to_str().expect("path")), &cfg, &hist).expect("import2");
+        let count2 = import_history_to_path(Some(src.to_str().expect("path")), &cfg, &hist)
+            .expect("import2");
         assert_eq!(count2, 0);
     }
 
@@ -832,8 +961,21 @@ mod tests {
         let exported = dir.path().join("export.tsv");
         let cfg = test_config(hist.clone());
 
-        record_to_path(&["echo".into(), "hello".into()], 0, 50, Some("/tmp"), &cfg, &hist).expect("rec");
-        export_history_from_path(Some(exported.to_str().expect("path")), crate::arena::Scope::Global, &hist).expect("export");
+        record_to_path(
+            &["echo".into(), "hello".into()],
+            0,
+            50,
+            Some("/tmp"),
+            &cfg,
+            &hist,
+        )
+        .expect("rec");
+        export_history_from_path(
+            Some(exported.to_str().expect("path")),
+            crate::arena::Scope::Global,
+            &hist,
+        )
+        .expect("export");
 
         let meta = std::fs::metadata(&exported).expect("meta");
         assert_eq!(meta.mode() & 0o777, 0o600);

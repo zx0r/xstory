@@ -15,9 +15,9 @@ use memmap2::Mmap;
 #[derive(Clone, Copy)]
 #[repr(C, align(16))]
 pub struct ByteView {
-    pub len:    u32,
+    pub len: u32,
     pub prefix: [u8; 4],
-    pub data:   [u8; 8],
+    pub data: [u8; 8],
 }
 
 /// Candidate scored for Top-K heap. 8 bytes, Copy.
@@ -26,12 +26,15 @@ pub struct ByteView {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Scored {
     pub score: u32,
-    pub idx:   u32,
+    pub idx: u32,
 }
 
 impl Ord for Scored {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other.score.cmp(&self.score).then_with(|| other.idx.cmp(&self.idx))
+        other
+            .score
+            .cmp(&self.score)
+            .then_with(|| other.idx.cmp(&self.idx))
     }
 }
 
@@ -65,27 +68,27 @@ pub enum PreviewMode {
 
 /// Application configuration.
 pub struct Config {
-    pub history_path:     PathBuf,
-    pub scroll_off:       u16,
-    pub preview_mode:     PreviewMode,
+    pub history_path: PathBuf,
+    pub scroll_off: u16,
+    pub preview_mode: PreviewMode,
     pub exclude_commands: Vec<String>,
-    pub secret_patterns:  Vec<String>,
+    pub secret_patterns: Vec<String>,
 }
 
 // ── Arena ────────────────────────────────────────────────────────
 
 /// Columnar in-memory arena. Owns the mmap and all decoded columns.
 pub struct Arena {
-    mmap:               Option<Mmap>,
-    unescape_buf:       Vec<u8>,
-    pub timestamps:     Vec<i64>,
-    pub durations:      Vec<u32>,
-    pub exit_codes:     Vec<i32>,
-    pub commands:       Vec<ByteView>,
-    pub cwds:           Vec<ByteView>,
-    pub masks:          Vec<u64>,
+    mmap: Option<Mmap>,
+    unescape_buf: Vec<u8>,
+    pub timestamps: Vec<i64>,
+    pub durations: Vec<u32>,
+    pub exit_codes: Vec<i32>,
+    pub commands: Vec<ByteView>,
+    pub cwds: Vec<ByteView>,
+    pub masks: Vec<u64>,
     pub global_indices: Vec<u32>,
-    pub local_indices:  Vec<u32>,
+    pub local_indices: Vec<u32>,
 }
 
 // ── FNV-1a ───────────────────────────────────────────────────────
@@ -123,19 +126,34 @@ fn parse_ascii_i64(s: &[u8]) -> Option<i64> {
     Some(if neg { -n } else { n })
 }
 
-#[inline] fn parse_i64(s: &[u8]) -> Option<i64> { parse_ascii_i64(s) }
-#[inline] fn parse_u32(s: &[u8]) -> Option<u32> { u32::try_from(parse_ascii_i64(s)?).ok() }
-#[inline] fn parse_i32(s: &[u8]) -> Option<i32> { i32::try_from(parse_ascii_i64(s)?).ok() }
+#[inline]
+fn parse_i64(s: &[u8]) -> Option<i64> {
+    parse_ascii_i64(s)
+}
+#[inline]
+fn parse_u32(s: &[u8]) -> Option<u32> {
+    u32::try_from(parse_ascii_i64(s)?).ok()
+}
+#[inline]
+fn parse_i32(s: &[u8]) -> Option<i32> {
+    i32::try_from(parse_ascii_i64(s)?).ok()
+}
 
 // ── ByteView construction ────────────────────────────────────────
 
 #[allow(clippy::cast_possible_truncation)]
 fn make_byteview(s: &[u8], buf_id: u32, offset: u32) -> ByteView {
-    let mut bv = ByteView { len: s.len() as u32, prefix: [0; 4], data: [0; 8] };
+    let mut bv = ByteView {
+        len: s.len() as u32,
+        prefix: [0; 4],
+        data: [0; 8],
+    };
     let copy_p = s.len().min(4);
     bv.prefix[..copy_p].copy_from_slice(&s[..copy_p]);
     if s.len() <= 12 {
-        if s.len() > 4 { bv.data[..s.len() - 4].copy_from_slice(&s[4..]); }
+        if s.len() > 4 {
+            bv.data[..s.len() - 4].copy_from_slice(&s[4..]);
+        }
     } else {
         bv.data[..4].copy_from_slice(&buf_id.to_le_bytes());
         bv.data[4..8].copy_from_slice(&offset.to_le_bytes());
@@ -145,7 +163,11 @@ fn make_byteview(s: &[u8], buf_id: u32, offset: u32) -> ByteView {
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn byteview_raw(s: &[u8], mmap_base: *const u8) -> ByteView {
-    let offset = if s.len() > 12 { unsafe { s.as_ptr().offset_from(mmap_base) as u32 } } else { 0 };
+    let offset = if s.len() > 12 {
+        unsafe { s.as_ptr().offset_from(mmap_base) as u32 }
+    } else {
+        0
+    };
     make_byteview(s, 0, offset)
 }
 
@@ -156,7 +178,10 @@ fn byteview_unescaped(s: &[u8], offset: u32) -> ByteView {
 
 // ── Unescape ─────────────────────────────────────────────────────
 
-#[inline] fn has_escapes(s: &[u8]) -> bool { memchr::memchr(b'\\', s).is_some() }
+#[inline]
+fn has_escapes(s: &[u8]) -> bool {
+    memchr::memchr(b'\\', s).is_some()
+}
 
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn unescape_into(s: &[u8], buf: &mut Vec<u8>) -> (u32, usize) {
@@ -165,11 +190,14 @@ pub(crate) fn unescape_into(s: &[u8], buf: &mut Vec<u8>) -> (u32, usize) {
     while i < s.len() {
         if s[i] == b'\\' && i + 1 < s.len() {
             let b = match s[i + 1] {
-                b't'  => b'\t',
-                b'n'  => b'\n',
-                b'r'  => b'\r',
+                b't' => b'\t',
+                b'n' => b'\n',
+                b'r' => b'\r',
                 b'\\' => b'\\',
-                other => { buf.push(b'\\'); other }
+                other => {
+                    buf.push(b'\\');
+                    other
+                }
             };
             buf.push(b);
             i += 2;
@@ -242,8 +270,7 @@ impl Arena {
 
         let mut pos = 0;
         while pos < data.len() {
-            let line_end = memchr::memchr(b'\n', &data[pos..])
-                .map_or(data.len(), |i| pos + i);
+            let line_end = memchr::memchr(b'\n', &data[pos..]).map_or(data.len(), |i| pos + i);
             let line = &data[pos..line_end];
             pos = line_end + 1;
 
@@ -252,23 +279,37 @@ impl Arena {
             }
 
             // 5 fields: timestamp \t duration \t exit_code \t cwd \t command
-            let Some(t1) = memchr::memchr(b'\t', line) else { continue };
-            let Some(t2) = memchr::memchr(b'\t', &line[t1 + 1..]).map(|i| t1 + 1 + i) else { continue };
-            let Some(t3) = memchr::memchr(b'\t', &line[t2 + 1..]).map(|i| t2 + 1 + i) else { continue };
-            let Some(t4) = memchr::memchr(b'\t', &line[t3 + 1..]).map(|i| t3 + 1 + i) else { continue };
+            let Some(t1) = memchr::memchr(b'\t', line) else {
+                continue;
+            };
+            let Some(t2) = memchr::memchr(b'\t', &line[t1 + 1..]).map(|i| t1 + 1 + i) else {
+                continue;
+            };
+            let Some(t3) = memchr::memchr(b'\t', &line[t2 + 1..]).map(|i| t2 + 1 + i) else {
+                continue;
+            };
+            let Some(t4) = memchr::memchr(b'\t', &line[t3 + 1..]).map(|i| t3 + 1 + i) else {
+                continue;
+            };
             if memchr::memchr(b'\t', &line[t4 + 1..]).is_some() {
                 continue; // >5 fields → malformed
             }
 
-            let field_ts  = &line[..t1];
+            let field_ts = &line[..t1];
             let field_dur = &line[t1 + 1..t2];
             let field_exit = &line[t2 + 1..t3];
             let field_cwd = &line[t3 + 1..t4];
             let field_cmd = &line[t4 + 1..];
 
-            let Some(ts)   = parse_i64(field_ts)   else { continue };
-            let Some(dur)  = parse_u32(field_dur)   else { continue };
-            let Some(exit) = parse_i32(field_exit)  else { continue };
+            let Some(ts) = parse_i64(field_ts) else {
+                continue;
+            };
+            let Some(dur) = parse_u32(field_dur) else {
+                continue;
+            };
+            let Some(exit) = parse_i32(field_exit) else {
+                continue;
+            };
 
             let bv_cwd = if has_escapes(field_cwd) {
                 let (offset, len) = unescape_into(field_cwd, &mut arena.unescape_buf);
@@ -352,10 +393,26 @@ impl Arena {
         self.local_indices = local_buf;
     }
 
-    #[must_use] #[inline] pub fn cmd_bytes(&self, idx: u32) -> &[u8] { self.resolve_bv(&self.commands[idx as usize]) }
-    #[must_use] #[inline] pub fn cwd_bytes(&self, idx: u32) -> &[u8] { self.resolve_bv(&self.cwds[idx as usize]) }
-    #[must_use] #[inline] pub fn cmd_str(&self, idx: u32) -> &str { unsafe { std::str::from_utf8_unchecked(self.cmd_bytes(idx)) } }
-    #[must_use] #[inline] pub fn cwd_str(&self, idx: u32) -> &str { unsafe { std::str::from_utf8_unchecked(self.cwd_bytes(idx)) } }
+    #[must_use]
+    #[inline]
+    pub fn cmd_bytes(&self, idx: u32) -> &[u8] {
+        self.resolve_bv(&self.commands[idx as usize])
+    }
+    #[must_use]
+    #[inline]
+    pub fn cwd_bytes(&self, idx: u32) -> &[u8] {
+        self.resolve_bv(&self.cwds[idx as usize])
+    }
+    #[must_use]
+    #[inline]
+    pub fn cmd_str(&self, idx: u32) -> &str {
+        unsafe { std::str::from_utf8_unchecked(self.cmd_bytes(idx)) }
+    }
+    #[must_use]
+    #[inline]
+    pub fn cwd_str(&self, idx: u32) -> &str {
+        unsafe { std::str::from_utf8_unchecked(self.cwd_bytes(idx)) }
+    }
 
     /// Core resolver: takes `&ByteView` (borrowed from `self.commands`/`cwds` Vec),
     /// so inlined bytes live as long as `&self`.
@@ -373,10 +430,10 @@ impl Arena {
             }
         } else {
             let buffer_id = u32::from_le_bytes([bv.data[0], bv.data[1], bv.data[2], bv.data[3]]);
-            let offset    = u32::from_le_bytes([bv.data[4], bv.data[5], bv.data[6], bv.data[7]]);
+            let offset = u32::from_le_bytes([bv.data[4], bv.data[5], bv.data[6], bv.data[7]]);
             let buf = match (buffer_id, &self.mmap) {
                 (0, Some(m)) => &m[..],
-                _            => &self.unescape_buf[..],
+                _ => &self.unescape_buf[..],
             };
             &buf[offset as usize..][..len]
         }
@@ -387,12 +444,18 @@ impl Arena {
     pub fn scope_indices(&self, scope: Scope) -> &[u32] {
         match scope {
             Scope::Global => &self.global_indices,
-            Scope::Local  => &self.local_indices,
+            Scope::Local => &self.local_indices,
         }
     }
 
-    #[must_use] pub const fn len(&self) -> usize { self.commands.len() }
-    #[must_use] pub const fn is_empty(&self) -> bool { self.commands.is_empty() }
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.commands.len()
+    }
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
 }
 
 // ── Config ───────────────────────────────────────────────────────
@@ -402,11 +465,19 @@ impl Config {
     #[must_use]
     pub fn load() -> Self {
         let mut cfg = Self::defaults();
-        if let Some(path) = Self::config_file_path() && let Ok(contents) = std::fs::read_to_string(&path) {
+        if let Some(path) = Self::config_file_path()
+            && let Ok(contents) = std::fs::read_to_string(&path)
+        {
             Self::parse_config_file(&contents, &mut cfg);
         }
-        if let Ok(val) = std::env::var("XSTORY_HISTORY_PATH") { cfg.history_path = PathBuf::from(val); }
-        if let Ok(val) = std::env::var("XSTORY_SCROLL_OFF") && let Ok(n) = val.parse::<u16>() { cfg.scroll_off = n; }
+        if let Ok(val) = std::env::var("XSTORY_HISTORY_PATH") {
+            cfg.history_path = PathBuf::from(val);
+        }
+        if let Ok(val) = std::env::var("XSTORY_SCROLL_OFF")
+            && let Ok(n) = val.parse::<u16>()
+        {
+            cfg.scroll_off = n;
+        }
         if let Ok(val) = std::env::var("XSTORY_PREVIEW") {
             if val.eq_ignore_ascii_case("fixed") {
                 cfg.preview_mode = PreviewMode::Fixed;
@@ -427,24 +498,44 @@ impl Config {
             scroll_off: 4,
             preview_mode: PreviewMode::Dynamic,
             exclude_commands: vec!["exit".into(), "logout".into(), "clear".into()],
-            secret_patterns: vec!["AWS_SECRET".into(), "GITHUB_TOKEN".into(), "--password".into()],
+            secret_patterns: vec![
+                "AWS_SECRET".into(),
+                "GITHUB_TOKEN".into(),
+                "--password".into(),
+            ],
         }
     }
 
     fn config_file_path() -> Option<PathBuf> {
-        std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config/xstory/config"))
+        std::env::var("HOME")
+            .ok()
+            .map(|h| PathBuf::from(h).join(".config/xstory/config"))
     }
 
     fn parse_config_file(contents: &str, cfg: &mut Self) {
-        for line in contents.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
-            let Some((k, v)) = line.split_once('=') else { continue };
+        for line in contents
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
             match (k.trim(), v.trim()) {
                 ("history_path", v) => cfg.history_path = PathBuf::from(v),
-                ("scroll_off", v) => if let Ok(n) = v.parse() { cfg.scroll_off = n; },
+                ("scroll_off", v) => {
+                    if let Ok(n) = v.parse() {
+                        cfg.scroll_off = n;
+                    }
+                }
                 ("preview" | "preview_mode", "fixed") => cfg.preview_mode = PreviewMode::Fixed,
                 ("preview" | "preview_mode", "dynamic") => cfg.preview_mode = PreviewMode::Dynamic,
-                ("exclude_commands", v) => cfg.exclude_commands = v.split(',').map(|s| s.trim().to_owned()).collect(),
-                ("secret_patterns", v) => cfg.secret_patterns = v.split(',').map(|s| s.trim().to_owned()).collect(),
+                ("exclude_commands", v) => {
+                    cfg.exclude_commands = v.split(',').map(|s| s.trim().to_owned()).collect();
+                }
+                ("secret_patterns", v) => {
+                    cfg.secret_patterns = v.split(',').map(|s| s.trim().to_owned()).collect();
+                }
                 _ => {}
             }
         }
@@ -521,27 +612,21 @@ mod tests {
 
     #[test]
     fn escape_tab() {
-        let (_dir, path) = write_tsv(&[
-            "1000\t50\t0\t/home\techo hello\\tworld",
-        ]);
+        let (_dir, path) = write_tsv(&["1000\t50\t0\t/home\techo hello\\tworld"]);
         let arena = Arena::load(&path, None).expect("load");
         assert_eq!(arena.cmd_str(0), "echo hello\tworld");
     }
 
     #[test]
     fn escape_newline() {
-        let (_dir, path) = write_tsv(&[
-            "1000\t50\t0\t/home\techo\\nhello",
-        ]);
+        let (_dir, path) = write_tsv(&["1000\t50\t0\t/home\techo\\nhello"]);
         let arena = Arena::load(&path, None).expect("load");
         assert_eq!(arena.cmd_str(0), "echo\nhello");
     }
 
     #[test]
     fn escape_backslash() {
-        let (_dir, path) = write_tsv(&[
-            "1000\t50\t0\t/home\tpath\\\\dir",
-        ]);
+        let (_dir, path) = write_tsv(&["1000\t50\t0\t/home\tpath\\\\dir"]);
         let arena = Arena::load(&path, None).expect("load");
         assert_eq!(arena.cmd_str(0), "path\\dir");
     }
@@ -649,10 +734,7 @@ mod tests {
 
     #[test]
     fn scope_indices_dispatch() {
-        let (_dir, path) = write_tsv(&[
-            "1000\t50\t0\t/home\tls",
-            "2000\t50\t0\t/tmp\tpwd",
-        ]);
+        let (_dir, path) = write_tsv(&["1000\t50\t0\t/home\tls", "2000\t50\t0\t/tmp\tpwd"]);
         let arena = Arena::load(&path, Some("/home")).expect("load");
         assert_eq!(arena.scope_indices(Scope::Global).len(), 2);
         assert_eq!(arena.scope_indices(Scope::Local).len(), 1);
@@ -711,7 +793,10 @@ mod tests {
     #[test]
     fn config_parse_file() {
         let mut cfg = Config::defaults();
-        Config::parse_config_file("# comment\nscroll_off = 8\nexclude_commands = cd, ls\n", &mut cfg);
+        Config::parse_config_file(
+            "# comment\nscroll_off = 8\nexclude_commands = cd, ls\n",
+            &mut cfg,
+        );
         assert_eq!(cfg.scroll_off, 8);
         assert_eq!(cfg.exclude_commands, vec!["cd", "ls"]);
     }

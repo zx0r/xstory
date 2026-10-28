@@ -6,7 +6,7 @@ use std::collections::BinaryHeap;
 
 use nucleo_matcher::{Matcher, Utf32Str};
 
-use crate::arena::{char_mask, Arena, Scored, Scope};
+use crate::arena::{Arena, Scope, Scored, char_mask};
 
 // ── Constants ────────────────────────────────────────────────────
 
@@ -25,22 +25,36 @@ const CHUNK_SIZE: usize = 32768;
 #[derive(Clone, Copy)]
 pub enum QueryMode<'a> {
     Empty,
-    Prefix(&'a str),     // ^foo
-    Substring(&'a str),  // 'foo
-    Suffix(&'a str),     // foo$
-    Fuzzy(&'a str),      // default
+    Prefix(&'a str),    // ^foo
+    Substring(&'a str), // 'foo
+    Suffix(&'a str),    // foo$
+    Fuzzy(&'a str),     // default
 }
 
 #[allow(clippy::option_if_let_else)]
 fn parse_query(q: &str) -> QueryMode<'_> {
     let t = q.trim();
-    if t.is_empty() { return QueryMode::Empty; }
+    if t.is_empty() {
+        return QueryMode::Empty;
+    }
     if let Some(r) = t.strip_prefix('^') {
-        if r.is_empty() { QueryMode::Empty } else { QueryMode::Prefix(r) }
+        if r.is_empty() {
+            QueryMode::Empty
+        } else {
+            QueryMode::Prefix(r)
+        }
     } else if let Some(r) = t.strip_prefix('\'') {
-        if r.is_empty() { QueryMode::Empty } else { QueryMode::Substring(r) }
+        if r.is_empty() {
+            QueryMode::Empty
+        } else {
+            QueryMode::Substring(r)
+        }
     } else if let Some(r) = t.strip_suffix('$') {
-        if r.is_empty() { QueryMode::Empty } else { QueryMode::Suffix(r) }
+        if r.is_empty() {
+            QueryMode::Empty
+        } else {
+            QueryMode::Suffix(r)
+        }
     } else {
         QueryMode::Fuzzy(t)
     }
@@ -51,13 +65,16 @@ fn parse_query(q: &str) -> QueryMode<'_> {
 /// Immutable search result: indices into Arena, sorted by score descending.
 pub struct SearchResult<'a> {
     pub indices: Cow<'a, [u32]>,
-    pub total:   u32,
+    pub total: u32,
 }
 
 impl SearchResult<'_> {
     #[must_use]
     pub const fn empty() -> Self {
-        Self { indices: Cow::Borrowed(&[]), total: 0 }
+        Self {
+            indices: Cow::Borrowed(&[]),
+            total: 0,
+        }
     }
 }
 
@@ -72,7 +89,10 @@ fn search_chunk(
 ) -> (BinaryHeap<Scored>, u32) {
     let query_str = match mode {
         QueryMode::Empty => unreachable!(),
-        QueryMode::Prefix(s) | QueryMode::Substring(s) | QueryMode::Suffix(s) | QueryMode::Fuzzy(s) => s,
+        QueryMode::Prefix(s)
+        | QueryMode::Substring(s)
+        | QueryMode::Suffix(s)
+        | QueryMode::Fuzzy(s) => s,
     };
     let q_bytes = query_str.as_bytes();
     let fast_prefix = matches!(mode, QueryMode::Prefix(_) | QueryMode::Fuzzy(_));
@@ -165,7 +185,9 @@ fn search_parallel<'a>(
     }
 
     if all_items.len() > TOP_K {
-        all_items.select_nth_unstable_by(TOP_K, |a, b| b.score.cmp(&a.score).then_with(|| a.idx.cmp(&b.idx)));
+        all_items.select_nth_unstable_by(TOP_K, |a, b| {
+            b.score.cmp(&a.score).then_with(|| a.idx.cmp(&b.idx))
+        });
         all_items.truncate(TOP_K);
     }
     all_items.sort_unstable_by(|a, b| b.score.cmp(&a.score).then_with(|| a.idx.cmp(&b.idx)));
@@ -186,15 +208,23 @@ fn search_parallel<'a>(
 #[allow(clippy::cast_possible_truncation)]
 pub fn search<'a>(arena: &'a Arena, query: &str, scope: Scope) -> SearchResult<'a> {
     let indices = arena.scope_indices(scope);
-    if indices.is_empty() { return SearchResult::empty(); }
+    if indices.is_empty() {
+        return SearchResult::empty();
+    }
     let mode = parse_query(query);
 
     if matches!(mode, QueryMode::Empty) {
-        return SearchResult { indices: Cow::Borrowed(indices), total: indices.len() as u32 };
+        return SearchResult {
+            indices: Cow::Borrowed(indices),
+            total: indices.len() as u32,
+        };
     }
 
     let query_bytes = match mode {
-        QueryMode::Prefix(s) | QueryMode::Substring(s) | QueryMode::Suffix(s) | QueryMode::Fuzzy(s) => s.as_bytes(),
+        QueryMode::Prefix(s)
+        | QueryMode::Substring(s)
+        | QueryMode::Suffix(s)
+        | QueryMode::Fuzzy(s) => s.as_bytes(),
         QueryMode::Empty => unreachable!(),
     };
     let query_mask = char_mask(query_bytes);
@@ -255,7 +285,11 @@ mod tests {
         let result = search(&arena, "^git", Scope::Global);
         assert_eq!(result.indices.len(), 2);
         for &idx in result.indices.iter() {
-            assert!(arena.cmd_str(idx).starts_with("git"), "expected prefix match: {}", arena.cmd_str(idx));
+            assert!(
+                arena.cmd_str(idx).starts_with("git"),
+                "expected prefix match: {}",
+                arena.cmd_str(idx)
+            );
         }
     }
 
@@ -269,7 +303,11 @@ mod tests {
         let result = search(&arena, "'hello", Scope::Global);
         assert_eq!(result.indices.len(), 2);
         for &idx in result.indices.iter() {
-            assert!(arena.cmd_str(idx).contains("hello"), "expected substring match: {}", arena.cmd_str(idx));
+            assert!(
+                arena.cmd_str(idx).contains("hello"),
+                "expected substring match: {}",
+                arena.cmd_str(idx)
+            );
         }
     }
 
@@ -283,7 +321,11 @@ mod tests {
         let result = search(&arena, "-la$", Scope::Global);
         assert_eq!(result.indices.len(), 2);
         for &idx in result.indices.iter() {
-            assert!(arena.cmd_str(idx).ends_with("-la"), "expected suffix match: {}", arena.cmd_str(idx));
+            assert!(
+                arena.cmd_str(idx).ends_with("-la"),
+                "expected suffix match: {}",
+                arena.cmd_str(idx)
+            );
         }
     }
 
@@ -298,7 +340,10 @@ mod tests {
         assert!(!result.indices.is_empty());
         // Exact match "git" should score highest
         let top_cmd = arena.cmd_str(result.indices[0]);
-        assert_eq!(top_cmd, "git", "exact match should rank first, got: {top_cmd}");
+        assert_eq!(
+            top_cmd, "git",
+            "exact match should rank first, got: {top_cmd}"
+        );
     }
 
     #[test]
