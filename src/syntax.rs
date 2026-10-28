@@ -58,9 +58,9 @@ impl<const N: usize> AstCache<N> {
             return &self.slots[slot].1;
         }
 
-        let mut spans = Vec::new();
-        parse_bash(cmd, &mut spans);
-        self.slots[slot] = (h, spans);
+        self.slots[slot].0 = h;
+        self.slots[slot].1.clear();
+        parse_bash(cmd, &mut self.slots[slot].1);
         &self.slots[slot].1
     }
 }

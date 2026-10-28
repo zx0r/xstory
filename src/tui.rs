@@ -1,6 +1,7 @@
 //! Interactive TUI dashboard for searching and selecting shell history.
 //! Uses crossterm for raw mode and ratatui for differential rendering to stderr.
 
+use std::cell::RefCell;
 use std::io::Write;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
@@ -34,7 +35,7 @@ pub enum FocusedPanel {
 }
 
 /// The entire TUI state. Owned by `run_tui`, mutated in-place.
-pub struct Dashboard {
+pub struct Dashboard<'a> {
     // --- input ---
     pub query:           String,
     pub cursor:          usize,
@@ -44,7 +45,7 @@ pub struct Dashboard {
 
     // --- search ---
     pub scope:           Scope,
-    pub result:          SearchResult,
+    pub result:          SearchResult<'a>,
     pub dedup_total:     usize,
 
     // --- navigation ---
@@ -62,7 +63,7 @@ pub struct Dashboard {
     pub dirty:           bool,
 }
 
-impl Dashboard {
+impl<'a> Dashboard<'a> {
     /// Create a new Dashboard state with initial values.
     #[must_use]
     pub fn new(
@@ -70,7 +71,7 @@ impl Dashboard {
         width: u16,
         height: u16,
         initial_q: Option<&str>,
-        arena: &Arena,
+        arena: &'a Arena,
     ) -> Self {
         let query = initial_q.unwrap_or("").to_owned();
         let cursor = query.chars().count();
@@ -138,7 +139,7 @@ impl Dashboard {
     }
 
     /// Trigger search query change, resetting selection and scroll.
-    pub fn on_query_mutated(&mut self, arena: &Arena) {
+    pub fn on_query_mutated(&mut self, arena: &'a Arena) {
         self.focus = FocusedPanel::Query;
         self.result = search::search(arena, &self.query, self.scope);
         self.selected = 0;
@@ -457,12 +458,35 @@ fn bracketed<'a>(inner: impl Into<std::borrow::Cow<'a, str>>, border_color: Colo
     vec![Span::styled("[", b), Span::styled(inner, val), Span::styled("]", b)]
 }
 
-fn split_spans_into_lines(spans: Vec<Span<'_>>) -> Vec<Line<'_>> {
+/// Static whitespace buffer in `.rodata` for zero-allocation row padding.
+const SPACES: &str = concat!(
+    "                                                                ", // 64
+    "                                                                ", // 128
+    "                                                                ", // 192
+    "                                                                ", // 256
+    "                                                                ", // 320
+    "                                                                ", // 384
+    "                                                                ", // 448
+    "                                                                ", // 512
+);
+
+thread_local! {
+    static SCRATCH_OFFSETS: RefCell<Vec<(usize, char)>> = const { RefCell::new(Vec::new()) };
+    static SCRATCH_STYLES: RefCell<Vec<Style>> = const { RefCell::new(Vec::new()) };
+    static SCRATCH_MATCHES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    static SCRATCH_QCHARS: RefCell<Vec<char>> = const { RefCell::new(Vec::new()) };
+}
+
+fn split_spans_into_lines<'a>(spans: Vec<Span<'a>>) -> Vec<Line<'a>> {
     let (mut lines, mut cur) = (Vec::new(), Vec::new());
     for span in spans {
-        for (i, part) in span.content.split('\n').enumerate() {
+        let text: &'a str = match span.content {
+            std::borrow::Cow::Borrowed(s) => s,
+            std::borrow::Cow::Owned(_) => "",
+        };
+        for (i, part) in text.split('\n').enumerate() {
             if i > 0 { lines.push(Line::from(std::mem::take(&mut cur))); }
-            if !part.is_empty() { cur.push(Span::styled(part.to_string(), span.style)); }
+            if !part.is_empty() { cur.push(Span::styled(part, span.style)); }
         }
     }
     if !cur.is_empty() || lines.is_empty() { lines.push(Line::from(cur)); }
@@ -480,6 +504,8 @@ fn extract_query_term(query: &str) -> &str {
 }
 
 /// Zero-Destructive AST syntax highlighter with character-level query match overlay.
+/// Fast zero-alloc path on ASCII commands; reuses thread-local scratch vectors on UTF-8.
+#[allow(clippy::too_many_lines)]
 fn build_highlighted_spans<'a>(
     cmd: &'a str,
     spans: &[syntax::Span],
@@ -489,68 +515,144 @@ fn build_highlighted_spans<'a>(
     if cmd.is_empty() {
         return Vec::new();
     }
-    let char_offsets: Vec<(usize, char)> = cmd.char_indices().collect();
-    let char_count = char_offsets.len();
-    if char_count == 0 {
-        return Vec::new();
-    }
 
-    let mut char_styles = vec![syntax::style_for(syntax::TokenKind::Plain, theme); char_count];
+    let default_style = syntax::style_for(syntax::TokenKind::Plain, theme);
 
-    // 1. AST syntax token layer
-    for span in spans {
-        let (s_b, e_b) = (span.start as usize, span.end as usize);
-        let s_c = char_offsets.binary_search_by_key(&s_b, |&(b, _)| b).unwrap_or_else(|i| i).min(char_count);
-        let e_c = char_offsets.binary_search_by_key(&e_b, |&(b, _)| b).unwrap_or_else(|i| i).min(char_count);
-        char_styles[s_c..e_c].fill(syntax::style_for(span.kind, theme));
-    }
+    if cmd.is_ascii() {
+        let bytes = cmd.as_bytes();
+        let len = bytes.len();
 
-    // 2. Query match overlay (Zero-Destructive Subsequence Overlay)
-    if let Some(q) = query {
-        let term = extract_query_term(q);
-        if !term.is_empty() {
-            let q_chars: Vec<char> = term.chars().collect();
-            let mut matches = Vec::with_capacity(q_chars.len());
-            let mut q_idx = 0;
-            for (t_idx, &(_, ch)) in char_offsets.iter().enumerate() {
-                if q_idx < q_chars.len()
-                    && (ch.eq_ignore_ascii_case(&q_chars[q_idx]) || ch.to_lowercase().eq(q_chars[q_idx].to_lowercase()))
-                {
-                    matches.push(t_idx);
-                    q_idx += 1;
+        return SCRATCH_STYLES.with_borrow_mut(|styles| {
+            styles.clear();
+            styles.resize(len, default_style);
+
+            // 1. AST syntax token layer (direct byte offsets)
+            for span in spans {
+                let s = (span.start as usize).min(len);
+                let e = (span.end as usize).min(len);
+                if s < e {
+                    styles[s..e].fill(syntax::style_for(span.kind, theme));
                 }
             }
-            if q_idx == q_chars.len() {
-                let match_style = Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD);
-                for idx in matches {
-                    if idx < char_styles.len() {
-                        char_styles[idx] = match_style;
-                    }
+
+            // 2. Query match overlay (Zero-Destructive Subsequence Overlay)
+            if let Some(q) = query {
+                let term = extract_query_term(q);
+                if !term.is_empty() && term.is_ascii() {
+                    let t_bytes = term.as_bytes();
+                    SCRATCH_MATCHES.with_borrow_mut(|matches| {
+                        matches.clear();
+                        let mut t_idx = 0;
+                        for (b_idx, &b) in bytes.iter().enumerate() {
+                            if t_idx < t_bytes.len() && b.eq_ignore_ascii_case(&t_bytes[t_idx]) {
+                                matches.push(b_idx);
+                                t_idx += 1;
+                            }
+                        }
+                        if t_idx == t_bytes.len() {
+                            let match_style = Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD);
+                            for &idx in matches.iter() {
+                                styles[idx] = match_style;
+                            }
+                        }
+                    });
                 }
             }
+
+            // 3. Span coalescing (group adjacent characters of identical style into zero-copy slices)
+            let mut out = Vec::with_capacity(spans.len() + 4);
+            let mut i = 0;
+            while i < len {
+                let style = styles[i];
+                let mut j = i + 1;
+                while j < len && styles[j] == style {
+                    j += 1;
+                }
+                out.push(Span::styled(&cmd[i..j], style));
+                i = j;
+            }
+            out
+        });
+    }
+
+    // General UTF-8 fallback using reusable scratch vectors (zero heap reallocations)
+    SCRATCH_OFFSETS.with_borrow_mut(|char_offsets| {
+        char_offsets.clear();
+        char_offsets.extend(cmd.char_indices());
+        let char_count = char_offsets.len();
+        if char_count == 0 {
+            return Vec::new();
         }
-    }
 
-    // 3. Span coalescing (group adjacent characters of identical style into zero-copy slices)
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < char_count {
-        let style = char_styles[i];
-        let mut j = i + 1;
-        while j < char_count && char_styles[j] == style { j += 1; }
-        let b_start = char_offsets[i].0;
-        let b_end = if j < char_count { char_offsets[j].0 } else { cmd.len() };
-        if let Some(slice) = cmd.get(b_start..b_end) { out.push(Span::styled(slice, style)); }
-        i = j;
-    }
-    out
+        SCRATCH_STYLES.with_borrow_mut(|char_styles| {
+            char_styles.clear();
+            char_styles.resize(char_count, default_style);
+
+            // 1. AST syntax token layer
+            for span in spans {
+                let (s_b, e_b) = (span.start as usize, span.end as usize);
+                let s_c = char_offsets.binary_search_by_key(&s_b, |&(b, _)| b).unwrap_or_else(|i| i).min(char_count);
+                let e_c = char_offsets.binary_search_by_key(&e_b, |&(b, _)| b).unwrap_or_else(|i| i).min(char_count);
+                char_styles[s_c..e_c].fill(syntax::style_for(span.kind, theme));
+            }
+
+            // 2. Query match overlay
+            if let Some(q) = query {
+                let term = extract_query_term(q);
+                if !term.is_empty() {
+                    SCRATCH_QCHARS.with_borrow_mut(|q_chars| {
+                        q_chars.clear();
+                        q_chars.extend(term.chars());
+                        SCRATCH_MATCHES.with_borrow_mut(|matches| {
+                            matches.clear();
+                            let mut q_idx = 0;
+                            for (t_idx, &(_, ch)) in char_offsets.iter().enumerate() {
+                                if q_idx < q_chars.len()
+                                    && (ch.eq_ignore_ascii_case(&q_chars[q_idx]) || ch.to_lowercase().eq(q_chars[q_idx].to_lowercase()))
+                                {
+                                    matches.push(t_idx);
+                                    q_idx += 1;
+                                }
+                            }
+                            if q_idx == q_chars.len() {
+                                let match_style = Style::default().fg(Color::Indexed(215)).add_modifier(Modifier::BOLD);
+                                for &idx in matches.iter() {
+                                    if idx < char_styles.len() {
+                                        char_styles[idx] = match_style;
+                                    }
+                                }
+                            }
+                        });
+                    });
+                }
+            }
+
+            // 3. Span coalescing
+            let mut out = Vec::with_capacity(spans.len() + 4);
+            let mut i = 0;
+            while i < char_count {
+                let style = char_styles[i];
+                let mut j = i + 1;
+                while j < char_count && char_styles[j] == style {
+                    j += 1;
+                }
+                let b_start = char_offsets[i].0;
+                let b_end = if j < char_count { char_offsets[j].0 } else { cmd.len() };
+                if let Some(slice) = cmd.get(b_start..b_end) {
+                    out.push(Span::styled(slice, style));
+                }
+                i = j;
+            }
+            out
+        })
+    })
 }
 
 /// Render a single TUI frame to the ratatui Frame.
 #[allow(clippy::too_many_lines, clippy::similar_names)]
 pub fn render_frame(
     f: &mut Frame<'_>,
-    dash: &Dashboard,
+    dash: &Dashboard<'_>,
     arena: &Arena,
     token_cache: &mut TokenCache,
     preview_cache: &mut PreviewCache,
@@ -604,7 +706,11 @@ pub fn render_frame(
         });
         spans.extend(build_highlighted_spans(cmd, syntax::tokenize(token_cache, cmd), dash.theme, Some(&dash.query)));
         let used_width = 2 + cmd.chars().count();
-        if h_w > used_width { spans.push(Span::raw(" ".repeat(h_w - used_width))); }
+        let needed = h_w.saturating_sub(used_width);
+        if needed > 0 {
+            let pad = needed.min(SPACES.len());
+            spans.push(Span::raw(&SPACES[..pad]));
+        }
         if is_selected { for s in &mut spans { s.style = s.style.bg(sel_bg); } }
         Line::from(spans)
     }).collect();

@@ -343,8 +343,11 @@ impl Arena {
         if len <= 12 {
             // SAFETY: bv is borrowed from self.commands/cwds Vec, lives as long as &self.
             // prefix and data are contiguous in repr(C, align(16)) layout.
+            // Deriving from `bv` pointer ensures valid provenance over the entire struct (no subobject UB).
             unsafe {
-                let ptr = bv.prefix.as_ptr();
+                let ptr = std::ptr::from_ref(bv)
+                    .cast::<u8>()
+                    .add(core::mem::offset_of!(ByteView, prefix));
                 std::slice::from_raw_parts(ptr, len)
             }
         } else {

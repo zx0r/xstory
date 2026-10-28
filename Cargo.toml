@@ -2,6 +2,14 @@
 name = "xstory"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.96.0"
+homepage = "https://github.com/zx0r/nvimx"
+repository = "https://github.com/zx0r/xstory"
+description = "Minimalist Unix shell history engine"
+authors = ["zx0r <admin@zx0r.io>"]
+license = "MIT OR Apache-2.0"
+categories = ["command-line-utilities"]
+keywords = ["history", "xstory", "cli", "dotfiles"]
 
 [dependencies]
 crossterm = "0.29"

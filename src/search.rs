@@ -1,11 +1,17 @@
 //! Search pipeline: bitmask prune → nucleo fuzzy → score ranking.
 //! Borrows Arena immutably. Returns owned `SearchResult`.
 
+use std::borrow::Cow;
+use std::collections::BinaryHeap;
+
 use nucleo_matcher::{Matcher, Utf32Str};
 
 use crate::arena::{char_mask, Arena, Scored, Scope};
 
 // ── Constants ────────────────────────────────────────────────────
+
+/// Maximum scored candidates retained for non-empty search queries.
+pub const TOP_K: usize = 1000;
 
 /// Chunk size for parallel search. Below this, single-thread.
 const PAR_THRESHOLD: usize = 500;
@@ -43,145 +49,148 @@ fn parse_query(q: &str) -> QueryMode<'_> {
 // ── Search Result ────────────────────────────────────────────────
 
 /// Immutable search result: indices into Arena, sorted by score descending.
-pub struct SearchResult {
-    pub indices: Vec<u32>,
-    #[allow(dead_code)]
+pub struct SearchResult<'a> {
+    pub indices: Cow<'a, [u32]>,
     pub total:   u32,
 }
 
-impl SearchResult {
+impl SearchResult<'_> {
     #[must_use]
     pub const fn empty() -> Self {
-        Self { indices: Vec::new(), total: 0 }
+        Self { indices: Cow::Borrowed(&[]), total: 0 }
     }
-}
-
-// ── Core Match Dispatch ──────────────────────────────────────────
-
-/// Match a single candidate against the query. Returns score or None.
-#[allow(clippy::cast_possible_truncation)]
-fn match_candidate(
-    matcher: &mut Matcher,
-    mode: QueryMode<'_>,
-    haystack_str: &str,
-    needle_buf: &mut Vec<char>,
-    haystack_buf: &mut Vec<char>,
-) -> Option<u32> {
-    let query_str = match mode {
-        QueryMode::Empty => return Some(0),
-        QueryMode::Prefix(s) | QueryMode::Substring(s) | QueryMode::Suffix(s) | QueryMode::Fuzzy(s) => s,
-    };
-
-    let q_bytes = query_str.as_bytes();
-    let h_bytes = haystack_str.as_bytes();
-    // Fast-path: exact prefix bonus — only valid for Prefix and Fuzzy modes.
-    // Substring/Suffix modes must not inflate scores for prefix-coincidence matches.
-    if matches!(mode, QueryMode::Prefix(_) | QueryMode::Fuzzy(_))
-        && h_bytes.len() >= q_bytes.len()
-        && h_bytes[..q_bytes.len()].eq_ignore_ascii_case(q_bytes)
-    {
-        return Some(20_000u32.saturating_sub(haystack_str.len().min(10_000) as u32));
-    }
-
-    let needle = Utf32Str::new(query_str, needle_buf);
-    let haystack = Utf32Str::new(haystack_str, haystack_buf);
-
-    let score = match mode {
-        QueryMode::Empty => unreachable!(),
-        QueryMode::Prefix(_) => matcher.prefix_match(haystack, needle),
-        QueryMode::Substring(_) => matcher.substring_match(haystack, needle),
-        QueryMode::Suffix(_) => matcher.postfix_match(haystack, needle),
-        QueryMode::Fuzzy(_) => matcher.fuzzy_match(haystack, needle),
-    };
-
-    score.map(u32::from)
 }
 
 // ── Search Chunk Engine ──────────────────────────────────────────
 
+#[allow(clippy::cast_possible_truncation)]
 fn search_chunk(
     arena: &Arena,
     indices: &[u32],
     mode: QueryMode<'_>,
     query_mask: u64,
-) -> Vec<Scored> {
+) -> (BinaryHeap<Scored>, u32) {
+    let query_str = match mode {
+        QueryMode::Empty => unreachable!(),
+        QueryMode::Prefix(s) | QueryMode::Substring(s) | QueryMode::Suffix(s) | QueryMode::Fuzzy(s) => s,
+    };
+    let q_bytes = query_str.as_bytes();
+    let fast_prefix = matches!(mode, QueryMode::Prefix(_) | QueryMode::Fuzzy(_));
+
     let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
     let mut needle_buf = Vec::new();
+    let needle = Utf32Str::new(query_str, &mut needle_buf);
     let mut haystack_buf = Vec::new();
-    let mut scored = Vec::new();
+    let mut heap = BinaryHeap::with_capacity(TOP_K.min(indices.len()));
+    let mut total_matches: u32 = 0;
 
     for &idx in indices {
         if query_mask == 0 || (arena.masks[idx as usize] & query_mask) == query_mask {
             let cmd = arena.cmd_str(idx);
-            if let Some(score) = match_candidate(&mut matcher, mode, cmd, &mut needle_buf, &mut haystack_buf) {
-                scored.push(Scored { score, idx });
+            let h_bytes = cmd.as_bytes();
+
+            let score = if fast_prefix
+                && h_bytes.len() >= q_bytes.len()
+                && h_bytes[..q_bytes.len()].eq_ignore_ascii_case(q_bytes)
+            {
+                Some(20_000_u32.saturating_sub(cmd.len().min(10_000) as u32))
+            } else {
+                let haystack = Utf32Str::new(cmd, &mut haystack_buf);
+                let s = match mode {
+                    QueryMode::Empty => unreachable!(),
+                    QueryMode::Prefix(_) => matcher.prefix_match(haystack, needle),
+                    QueryMode::Substring(_) => matcher.substring_match(haystack, needle),
+                    QueryMode::Suffix(_) => matcher.postfix_match(haystack, needle),
+                    QueryMode::Fuzzy(_) => matcher.fuzzy_match(haystack, needle),
+                };
+                s.map(u32::from)
+            };
+
+            if let Some(score) = score {
+                total_matches += 1;
+                let cand = Scored { score, idx };
+                if heap.len() < TOP_K {
+                    heap.push(cand);
+                } else if let Some(mut top) = heap.peek_mut() {
+                    // Peek returns the candidate with the lowest score in the heap.
+                    // If cand has higher score (or equal score with smaller idx):
+                    if cand.score > top.score || (cand.score == top.score && cand.idx < top.idx) {
+                        *top = cand;
+                    }
+                }
             }
         }
     }
-    scored
+    (heap, total_matches)
 }
 
 // ── Search Execution (Sequential / Parallel) ─────────────────────
 
 #[allow(clippy::cast_possible_truncation)]
-fn search_sequential(
-    arena: &Arena,
-    indices: &[u32],
+fn search_sequential<'a>(
+    arena: &'a Arena,
+    indices: &'a [u32],
     mode: QueryMode<'_>,
     query_mask: u64,
-) -> SearchResult {
-    let mut items = search_chunk(arena, indices, mode, query_mask);
+) -> SearchResult<'a> {
+    let (heap, total) = search_chunk(arena, indices, mode, query_mask);
+    let mut items = heap.into_vec();
     items.sort_unstable_by(|a, b| b.score.cmp(&a.score).then_with(|| a.idx.cmp(&b.idx)));
-    let total = items.len() as u32;
     let result_indices = items.into_iter().map(|s| s.idx).collect();
     SearchResult {
-        indices: result_indices,
+        indices: Cow::Owned(result_indices),
         total,
     }
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn search_parallel(
-    arena: &Arena,
-    indices: &[u32],
+fn search_parallel<'a>(
+    arena: &'a Arena,
+    indices: &'a [u32],
     mode: QueryMode<'_>,
     query_mask: u64,
-) -> SearchResult {
+) -> SearchResult<'a> {
     use rayon::prelude::*;
 
-    let local_results: Vec<Vec<Scored>> = indices
+    let local_results: Vec<(BinaryHeap<Scored>, u32)> = indices
         .par_chunks(CHUNK_SIZE)
         .map(|chunk| search_chunk(arena, chunk, mode, query_mask))
         .collect();
 
-    let total_matches: usize = local_results.iter().map(Vec::len).sum();
-    let mut all_items = Vec::with_capacity(total_matches);
-    for chunk in local_results {
-        all_items.extend(chunk);
+    let total_matches: u32 = local_results.iter().map(|(_, cnt)| *cnt).sum();
+    let total_heap_items: usize = local_results.iter().map(|(h, _)| h.len()).sum();
+    let mut all_items = Vec::with_capacity(total_heap_items);
+    for (heap, _) in local_results {
+        all_items.extend(heap.into_vec());
     }
 
+    if all_items.len() > TOP_K {
+        all_items.select_nth_unstable_by(TOP_K, |a, b| b.score.cmp(&a.score).then_with(|| a.idx.cmp(&b.idx)));
+        all_items.truncate(TOP_K);
+    }
     all_items.sort_unstable_by(|a, b| b.score.cmp(&a.score).then_with(|| a.idx.cmp(&b.idx)));
-    let total = all_items.len() as u32;
     let result_indices = all_items.into_iter().map(|s| s.idx).collect();
     SearchResult {
-        indices: result_indices,
-        total,
+        indices: Cow::Owned(result_indices),
+        total: total_matches,
     }
 }
 
 // ── Public API ───────────────────────────────────────────────────
 
 /// Execute search pipeline: bitmask prune → nucleo fuzzy → sorted matches.
-/// Borrows Arena immutably. Returns owned `SearchResult` (`Vec<u32>` of indices).
+///
+/// Zero-copy: borrows `indices` slice from `Arena` for empty queries.
+/// Returns owned/borrowed `SearchResult` (`Cow<'a, [u32]>` of indices).
 #[must_use]
 #[allow(clippy::cast_possible_truncation)]
-pub fn search(arena: &Arena, query: &str, scope: Scope) -> SearchResult {
+pub fn search<'a>(arena: &'a Arena, query: &str, scope: Scope) -> SearchResult<'a> {
     let indices = arena.scope_indices(scope);
     if indices.is_empty() { return SearchResult::empty(); }
     let mode = parse_query(query);
 
     if matches!(mode, QueryMode::Empty) {
-        return SearchResult { indices: indices.to_vec(), total: indices.len() as u32 };
+        return SearchResult { indices: Cow::Borrowed(indices), total: indices.len() as u32 };
     }
 
     let query_bytes = match mode {
@@ -245,7 +254,7 @@ mod tests {
         ]);
         let result = search(&arena, "^git", Scope::Global);
         assert_eq!(result.indices.len(), 2);
-        for &idx in &result.indices {
+        for &idx in result.indices.iter() {
             assert!(arena.cmd_str(idx).starts_with("git"), "expected prefix match: {}", arena.cmd_str(idx));
         }
     }
@@ -259,7 +268,7 @@ mod tests {
         ]);
         let result = search(&arena, "'hello", Scope::Global);
         assert_eq!(result.indices.len(), 2);
-        for &idx in &result.indices {
+        for &idx in result.indices.iter() {
             assert!(arena.cmd_str(idx).contains("hello"), "expected substring match: {}", arena.cmd_str(idx));
         }
     }
@@ -273,7 +282,7 @@ mod tests {
         ]);
         let result = search(&arena, "-la$", Scope::Global);
         assert_eq!(result.indices.len(), 2);
-        for &idx in &result.indices {
+        for &idx in result.indices.iter() {
             assert!(arena.cmd_str(idx).ends_with("-la"), "expected suffix match: {}", arena.cmd_str(idx));
         }
     }
@@ -318,7 +327,7 @@ mod tests {
         }
         let (_dir, arena) = make_arena(&lines);
         let result = search(&arena, "cmd", Scope::Global);
-        assert_eq!(result.indices.len(), 2500);
+        assert_eq!(result.indices.len(), 1000);
         assert_eq!(result.total, 2500);
 
         let empty_res = search(&arena, "", Scope::Global);
@@ -377,8 +386,8 @@ mod tests {
 
         assert_eq!(seq.indices.len(), par.indices.len());
         // Same set of indices (order may differ slightly for equal scores)
-        let mut seq_sorted = seq.indices;
-        let mut par_sorted = par.indices;
+        let mut seq_sorted = seq.indices.into_owned();
+        let mut par_sorted = par.indices.into_owned();
         seq_sorted.sort_unstable();
         par_sorted.sort_unstable();
         assert_eq!(seq_sorted, par_sorted);
