@@ -270,7 +270,18 @@ enum Action {
 struct Cli {
     history_path: Option<PathBuf>,
     scope: Option<arena::Scope>,
+    preview: Option<arena::PreviewMode>,
     action: Action,
+}
+
+fn parse_preview_mode(val: &str) -> Result<arena::PreviewMode, Error> {
+    match val.to_lowercase().as_str() {
+        "dynamic" => Ok(arena::PreviewMode::Dynamic),
+        "fixed" => Ok(arena::PreviewMode::Fixed),
+        _ => Err(Error::InvalidArgs(
+            "invalid preview mode (expected dynamic or fixed)",
+        )),
+    }
 }
 
 // ── Argument Parsing ─────────────────────────────────────────────
@@ -334,6 +345,7 @@ fn parse_record_args(args: &[String]) -> Action {
 fn parse_args(args: &[String]) -> Result<Cli, Error> {
     let mut history_path = None;
     let mut scope = None;
+    let mut preview = None;
     let mut rest = Vec::new();
     let mut it = args.iter();
 
@@ -342,12 +354,14 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
             return Ok(Cli {
                 history_path,
                 scope,
+                preview,
                 action: Action::Help,
             });
         } else if arg == "-v" || arg == "-V" || arg == "--version" {
             return Ok(Cli {
                 history_path,
                 scope,
+                preview,
                 action: Action::Version,
             });
         } else if let Some(val) = arg.strip_prefix("--history=") {
@@ -380,6 +394,16 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
                     ));
                 }
             };
+        } else if let Some(val) = arg
+            .strip_prefix("--preview=")
+            .or_else(|| arg.strip_prefix("--preview-mode="))
+        {
+            preview = Some(parse_preview_mode(val)?);
+        } else if arg == "-p" || arg == "--preview" || arg == "--preview-mode" {
+            let val = it
+                .next()
+                .ok_or(Error::InvalidArgs("missing argument for --preview"))?;
+            preview = Some(parse_preview_mode(val)?);
         } else {
             rest.push(arg.clone());
             for rem in it {
@@ -393,6 +417,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
         return Ok(Cli {
             history_path,
             scope,
+            preview,
             action: Action::Search {
                 initial_query: None,
             },
@@ -449,6 +474,16 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
                     q = Some(val.to_owned());
                 } else if a == "--query" || a == "-q" {
                     q = iter.next().cloned();
+                } else if let Some(val) = a
+                    .strip_prefix("--preview=")
+                    .or_else(|| a.strip_prefix("--preview-mode="))
+                {
+                    preview = Some(parse_preview_mode(val)?);
+                } else if a == "-p" || a == "--preview" || a == "--preview-mode" {
+                    let val = iter
+                        .next()
+                        .ok_or(Error::InvalidArgs("missing argument for --preview"))?;
+                    preview = Some(parse_preview_mode(val)?);
                 } else if !a.starts_with('-') && q.is_none() {
                     q = Some(a.clone());
                 }
@@ -468,6 +503,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
     Ok(Cli {
         history_path,
         scope,
+        preview,
         action,
     })
 }
@@ -483,10 +519,11 @@ Commands:\n  \
 Arguments:\n  \
   [QUERY]  Search query\n\n\
 Options:\n  \
-  -H, --history <PATH>  Path to history file\n  \
-  -s, --scope <SCOPE>   Search scope (global/local)\n  \
-  -h, --help            Print help\n  \
-  -V, --version         Print version\n"
+  -H, --history <PATH>   Path to history file\n  \
+  -s, --scope <SCOPE>    Search scope (global/local)\n  \
+  -p, --preview <MODE>   Preview mode (dynamic/fixed)\n  \
+  -h, --help             Print help\n  \
+  -V, --version          Print version\n"
     );
 }
 
@@ -521,7 +558,7 @@ fn run() -> Result<(), Error> {
             print!("{hook}");
             Ok(())
         }
-        action => execute(action, cli.history_path, cli.scope),
+        action => execute(action, cli.history_path, cli.scope, cli.preview),
     }
 }
 
@@ -529,10 +566,14 @@ fn execute(
     action: Action,
     history_path_override: Option<PathBuf>,
     scope: Option<arena::Scope>,
+    preview_override: Option<arena::PreviewMode>,
 ) -> Result<(), Error> {
     let mut config = arena::Config::load();
     if let Some(path) = history_path_override {
         config.history_path = path;
+    }
+    if let Some(prev) = preview_override {
+        config.preview_mode = prev;
     }
 
     match action {
@@ -842,6 +883,28 @@ mod tests {
         assert!(
             matches!(parse_args(&["--unknown-flag".into()]), Err(Error::InvalidArgs(msg)) if msg == "unknown option")
         );
+    }
+
+    #[test]
+    fn parse_preview_flags() {
+        match parse_args(&["--preview=fixed".into()]) {
+            Ok(cli) => assert_eq!(cli.preview, Some(arena::PreviewMode::Fixed)),
+            _ => panic!("expected parse success"),
+        }
+        match parse_args(&["--preview".into(), "dynamic".into()]) {
+            Ok(cli) => assert_eq!(cli.preview, Some(arena::PreviewMode::Dynamic)),
+            _ => panic!("expected parse success"),
+        }
+        match parse_args(&["-p".into(), "fixed".into()]) {
+            Ok(cli) => assert_eq!(cli.preview, Some(arena::PreviewMode::Fixed)),
+            _ => panic!("expected parse success"),
+        }
+        match parse_args(&["search".into(), "--preview=fixed".into()]) {
+            Ok(cli) => assert_eq!(cli.preview, Some(arena::PreviewMode::Fixed)),
+            _ => panic!("expected parse success"),
+        }
+        assert!(parse_args(&["--preview=unknown".into()]).is_err());
+        assert!(parse_args(&["--preview".into()]).is_err());
     }
 
     #[test]
