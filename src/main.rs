@@ -97,6 +97,8 @@ __xstory_init() {
 
     bind -m emacs "\"\\C-r\": \"$KEY1$KEY2\""
     bind -m vi-insert "\"\\C-r\": \"$KEY1$KEY2\""
+    bind -m emacs "\"\\e[A\": \"$KEY1$KEY2\""
+    bind -m vi-insert "\"\\e[A\": \"$KEY1$KEY2\""
 }
 __xstory_init
 unset -f __xstory_init
@@ -155,8 +157,11 @@ __xstory_widget() {
 
 zle -N __xstory_widget
 bindkey '^R' __xstory_widget
+bindkey '^[[A' __xstory_widget
 bindkey -M viins '^R' __xstory_widget
+bindkey -M viins '^[[A' __xstory_widget
 bindkey -M vicmd '^R' __xstory_widget
+bindkey -M vicmd '^[[A' __xstory_widget
 
 if [[ -n "${ZVM_VERSION-}" ]]; then
     zvm_after_init_commands+=(
@@ -198,8 +203,10 @@ function __xstory_search
     end
 end
 
+bind up __xstory_search
 bind \cr __xstory_search
 if bind -M insert >/dev/null 2>&1
+    bind -M insert up __xstory_search
     bind -M insert \cr __xstory_search
 end
 "#;
