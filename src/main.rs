@@ -166,9 +166,9 @@ if [[ -n "${ZVM_VERSION-}" ]]; then
 fi
 "#;
 
-const FISH_HOOK: &str = r#"status is-interactive; or exit 0
-set -q XSTORY_DISABLE; and exit 0
-command -q xstory; or exit 0
+const FISH_HOOK: &str = r#"status is-interactive; or return 0
+set -q XSTORY_DISABLE; and return 0
+command -q xstory; or return 0
 
 function __xstory_postexec --on-event fish_postexec
     set -l exit_code $status
