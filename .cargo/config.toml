@@ -1,0 +1,66 @@
+[build]
+rustflags = ["-Wrust_2024_compatibility"]
+
+# ------------------------------------------------------------------------------
+# High-Speed Linker & Dead-Code Elimination (GC Sections)
+# ------------------------------------------------------------------------------
+
+# Linux x86_64: Mold Linker & GC sections
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = [
+    "-C", "link-arg=-fuse-ld=mold",
+    "-C", "link-arg=-Wl,--threads=auto",
+    "-C", "link-arg=-Wl,--gc-sections",
+]
+
+# Linux AArch64: Mold Linker
+[target.aarch64-unknown-linux-gnu]
+linker = "clang"
+rustflags = [
+    "-C", "link-arg=-fuse-ld=mold",
+    "-C", "link-arg=-Wl,--threads=auto",
+    "-C", "link-arg=-Wl,--gc-sections",
+]
+
+# Linux MUSL Static: LLD Linker
+[target.x86_64-unknown-linux-musl]
+linker = "clang"
+rustflags = [
+    "-C", "link-arg=-fuse-ld=lld",
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=-Wl,--gc-sections",
+]
+
+# macOS Apple Silicon: Dead-strip dead functions & header padding
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-dead_strip",
+    "-C", "link-arg=-Wl,-headerpad_max_install_names",
+]
+
+# macOS Intel x86_64
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-dead_strip",
+    "-C", "link-arg=-Wl,-headerpad_max_install_names",
+]
+
+# Windows MSVC: lld-link fastlink with unused reference stripping
+[target.x86_64-pc-windows-msvc]
+linker = "lld-link"
+rustflags = [
+    "-C", "link-arg=/DEBUG:FASTLINK",
+    "-C", "link-arg=/OPT:REF",
+    "-C", "link-arg=/OPT:ICF",
+]
+
+# ------------------------------------------------------------------------------
+# Principal Productivity Aliases
+# ------------------------------------------------------------------------------
+[alias]
+qa = "clippy --all-targets --all-features -- -D warnings"
+fmt-check = "fmt --all -- --check"
+t = "test --all-targets"
+e2e = "test --test e2e"
+bloat = "bloat --release --crates"

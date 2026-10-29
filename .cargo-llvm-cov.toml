@@ -1,0 +1,23 @@
+# Source-Based Code Coverage Configuration (cargo-llvm-cov)
+[coverage]
+min-total = 80.0
+min-per-crate = 70.0
+
+[report]
+formats = ["html", "lcov", "text"]
+html-dir = "target/llvm-cov/html"
+lcov-file = "target/llvm-cov/lcov.info"
+
+[ignore]
+patterns = [
+    "tests/*",
+    "benches/*",
+    "examples/*",
+    "src/bin/*",
+]
+
+[workspace]
+include-all-members = true
+
+[test]
+all-features = true

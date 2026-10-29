@@ -1,0 +1,43 @@
+[store]
+dir = "target/nextest"
+
+# Concurrency pool for resource-heavy Neovim headless processes
+[test-groups.neovim-headless]
+max-threads = 4
+
+[profile.default]
+retries = 0
+slow-timeout = { period = "30s", terminate-after = 2 }
+leak-timeout = "500ms"
+fail-fast = true
+
+# E2E test isolation: dedicated thread pool with strict file descriptor leak control
+# Active for both local development loop and CI
+[[profile.default.overrides]]
+filter = "binary(e2e)"
+test-group = "neovim-headless"
+slow-timeout = { period = "45s", terminate-after = 2 }
+leak-timeout = "1s"
+
+[profile.ci]
+# Unit tests must never retry to prevent masking race conditions
+retries = 0
+fail-fast = false
+failure-output = "immediate-final"
+success-output = "never"
+status-level = "fail"
+final-status-level = "flaky"
+slow-timeout = { period = "30s", terminate-after = 2 }
+leak-timeout = "200ms"
+
+[profile.ci.junit]
+path = "junit-report.xml"
+report-name = "enterprise-ci-suite"
+store-success-output = false
+store-failure-output = true
+
+# CI retry resilience: exponential backoff with jitter exclusively for E2E
+[[profile.ci.overrides]]
+filter = "binary(e2e)"
+retries = { backoff = "exponential", count = 1, delay = "1s", jitter = true }
+

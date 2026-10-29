@@ -1,0 +1,29 @@
+msrv = "1.96.0"
+cognitive-complexity-threshold = 25
+too-many-arguments-threshold = 7
+too-many-lines-threshold = 120
+type-complexity-threshold = 250
+excessive-nesting-threshold = 6
+array-size-threshold = 512
+warn-on-all-wildcard-imports = true
+allow-unwrap-in-tests = true
+
+doc-valid-idents = [
+    "GitHub", "GitLab", "OpenTelemetry", "PostgreSQL", "MySQL", "SQLite",
+    "Kubernetes", "OAuth", "GraphQL", "WebAssembly", "JSON", "HTTP", "HTTPS",
+    "TCP", "UDP", "TLS", "IPC", "API", "REST", "SIMD", "UUID", "MSRV", "RAII", "POSIX",
+    "SemVer", "XDG", "NVIM_APPNAME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"
+]
+
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "Use `ahash::AHashMap` for high throughput or `BTreeMap` for deterministic key ordering." },
+    { path = "std::collections::HashSet", reason = "Use `ahash::AHashSet` or `BTreeSet`." },
+    { path = "std::sync::Mutex", reason = "Standard library Mutex lacks timeouts; use `parking_lot::Mutex` or `tokio::sync::Mutex`." },
+    { path = "std::sync::RwLock", reason = "Standard library RwLock suffers from writer starvation; use `parking_lot::RwLock`." },
+]
+
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "Mutating environment variables in multithreaded runtimes triggers POSIX undefined behavior." },
+    { path = "std::env::remove_var", reason = "Mutating environment variables in multithreaded runtimes is thread-unsafe." },
+    { path = "std::mem::forget", reason = "Use `std::mem::ManuallyDrop` to guard resource lifecycles explicitly." },
+]

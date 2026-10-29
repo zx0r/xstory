@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, unsafe_code)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

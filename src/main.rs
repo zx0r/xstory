@@ -210,6 +210,7 @@ end
 // ── Signal Handling (Unix) ───────────────────────────────────────
 
 #[cfg(unix)]
+#[allow(unsafe_code)]
 mod signals {
     unsafe extern "C" {
         fn signal(s: i32, h: usize) -> usize;
@@ -222,7 +223,7 @@ mod signals {
             let _ = raise(sig);
         }
     }
-    pub fn install() {
+    pub(crate) fn install() {
         unsafe {
             signal(2, handle_signal as *const () as usize);
             signal(15, handle_signal as *const () as usize);

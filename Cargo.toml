@@ -2,14 +2,30 @@
 name = "xstory"
 version = "0.1.0"
 edition = "2024"
+resolver = "3"
 rust-version = "1.96.0"
-homepage = "https://github.com/zx0r/nvimx"
 repository = "https://github.com/zx0r/xstory"
 description = "Minimalist Unix shell history engine"
+homepage = "https://github.com/zx0r/xstory#readme"
 authors = ["zx0r <admin@zx0r.io>"]
 license = "MIT OR Apache-2.0"
+readme = "README.md"
 categories = ["command-line-utilities"]
 keywords = ["history", "xstory", "cli", "dotfiles"]
+autobenches = false
+
+# Strict Source Ingestion Boundary: Whitelists strictly pure Rust sources & manifest
+include = [
+    "src/**/*.rs",
+    "tests/**/*.rs",
+    "benches/**/*.rs",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE*",
+]
+
+[package.metadata.dist]
+dist = true
 
 [dependencies]
 crossterm = "0.29"
@@ -37,11 +53,72 @@ harness = false
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-strip = true
 panic = "abort"
-incremental = false
+strip = true
+
+[profile.release-small]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = 2
+split-debuginfo = "unpacked"
+incremental = true
+codegen-units = 256
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false
+panic = "unwind"
+
+[profile.test]
+inherits = "dev"
+opt-level = 1
+debug = 1
+overflow-checks = true
+split-debuginfo = "unpacked"
+
+[profile.bench]
+inherits = "release"
+debug = true
+opt-level = 3
+lto = "thin"
+
+[lints.rust]
+unsafe_code = "deny"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+missing_debug_implementations = "warn"
 
 [lints.clippy]
+all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
 unwrap_used = "warn"
+expect_used = "warn"
+panic = "deny"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+needless_pass_by_value = "warn"
+module_name_repetitions = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+doc_markdown = "allow"
+

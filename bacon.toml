@@ -1,0 +1,24 @@
+# bacon.toml
+# Principal Developer Inner Loop Configuration (Background Zero-Flicker Daemon)
+
+default_job = "check"
+
+[jobs.check]
+command = ["cargo", "check", "--color", "always"]
+need_stdout = false
+
+[jobs.qa]
+command = ["cargo", "clippy", "--all-targets", "--all-features", "--color", "always", "--", "-D", "warnings"]
+need_stdout = false
+
+[jobs.test]
+command = ["cargo", "test", "--all-targets", "--color", "always"]
+need_stdout = true
+
+[jobs.nextest]
+command = ["cargo", "nextest", "run", "--profile", "default", "--color", "always"]
+need_stdout = true
+
+[jobs.e2e]
+command = ["cargo", "test", "--test", "e2e", "--color", "always", "--", "--nocapture"]
+need_stdout = true

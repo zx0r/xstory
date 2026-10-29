@@ -1,1 +1,56 @@
-/target
+# =========================
+# Rust & Build
+# =========================
+target/
+dist/
+.cargo-dist/
+src.BAK/
+**/*.rs.bk
+
+# =========================
+# OS / Editor junk
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+*~
+
+# =========================
+# Logs / temp
+# =========================
+*.log
+tmp/
+temp/
+
+# =========================
+# Env / secrets
+# =========================
+.env
+.env.*
+*.key
+*.pem
+
+# =========================
+# Build artifacts
+# =========================
+*.tar.gz
+*.zip
+
+# =========================
+# Coverage / profiling
+# =========================
+coverage/
+*.prof
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+
+# =========================
+# Local configuration
+# =========================
+config.toml
