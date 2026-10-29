@@ -22,7 +22,7 @@ const CHUNK_SIZE: usize = 32768;
 // ── Query Parsing ────────────────────────────────────────────────
 
 /// Parsed query tokens extracted once per keystroke.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QueryMode<'a> {
     Empty,
     Prefix(&'a str),    // ^foo
@@ -63,6 +63,7 @@ fn parse_query(q: &str) -> QueryMode<'_> {
 // ── Search Result ────────────────────────────────────────────────
 
 /// Immutable search result: indices into Arena, sorted by score descending.
+#[derive(Debug, Clone)]
 pub struct SearchResult<'a> {
     pub indices: Cow<'a, [u32]>,
     pub total: u32,

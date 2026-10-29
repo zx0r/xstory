@@ -22,6 +22,7 @@ assets/** linguist-vendored
 
 # --- Configuration & Workspace Metadata ---
 # Exclude config files and metadata from detection to reduce noise.
+Justfile* -linguist-detectable
 *.toml -linguist-detectable
 *.lock -linguist-detectable
 rust-toolchain.toml -linguist-detectable

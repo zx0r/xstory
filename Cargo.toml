@@ -56,6 +56,10 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+[profile.dist]
+inherits = "release"
+lto = "fat"
+
 [profile.release-small]
 inherits = "release"
 opt-level = "z"

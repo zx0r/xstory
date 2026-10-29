@@ -35,6 +35,7 @@ pub enum FocusedPanel {
 }
 
 /// The entire TUI state. Owned by `run_tui`, mutated in-place.
+#[derive(Debug)]
 pub struct Dashboard<'a> {
     // --- input ---
     pub query: String,

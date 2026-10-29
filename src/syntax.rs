@@ -32,6 +32,7 @@ pub enum TokenKind {
 // ── Generic AstCache ─────────────────────────────────────────────
 
 /// Direct-mapped AST cache with generic capacity N (must be power of two).
+#[derive(Debug)]
 pub struct AstCache<const N: usize> {
     slots: Box<[(u64, Vec<Span>); N]>,
 }

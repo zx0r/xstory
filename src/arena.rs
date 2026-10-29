@@ -12,7 +12,7 @@ use memmap2::Mmap;
 /// - Inline: prefix\[0..4\] ++ data\[0..len-4\], contiguous in `repr(C)`.
 /// - Out-of-line: prefix\[0..4\] is the first 4 bytes (for display),
 ///   data = \[`buffer_id`: u32 LE, offset: u32 LE\].
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C, align(16))]
 pub struct ByteView {
     pub len: u32,
@@ -23,7 +23,7 @@ pub struct ByteView {
 /// Candidate scored for Top-K heap. 8 bytes, Copy.
 /// Custom Ord: REVERSE score order so `BinaryHeap` (max-heap)
 /// keeps the MINIMUM score at `peek()` for O(1) rejection.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Scored {
     pub score: u32,
     pub idx: u32,
@@ -67,6 +67,7 @@ pub enum PreviewMode {
 }
 
 /// Application configuration.
+#[derive(Debug, Clone)]
 pub struct Config {
     pub history_path: PathBuf,
     pub scroll_off: u16,
@@ -78,6 +79,7 @@ pub struct Config {
 // ── Arena ────────────────────────────────────────────────────────
 
 /// Columnar in-memory arena. Owns the mmap and all decoded columns.
+#[derive(Debug)]
 pub struct Arena {
     mmap: Option<Mmap>,
     unescape_buf: Vec<u8>,
