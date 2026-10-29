@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-10-30
+
+### Added
+- Multi-platform release automation via `cargo-dist` and GitHub Actions.
+- Automated Homebrew tap formula publishing for `Xstory`.
+- Renovate configuration for dependency updates.
+- Dual licensing (`MIT` / `Apache-2.0`) and `CONTRIBUTING.md`.
+
+### Changed
+- Configured `[profile.dist]` profile with LTO and symbol stripping.
+
 ## [0.1.0] - 2026-10-30
 
 ### Added

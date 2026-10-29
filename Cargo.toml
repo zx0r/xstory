@@ -1,6 +1,6 @@
 [package]
 name = "xstory"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 resolver = "3"
 rust-version = "1.96.0"
@@ -16,12 +16,12 @@ autobenches = false
 
 # Strict Source Ingestion Boundary: Whitelists strictly pure Rust sources & manifest
 include = [
-    "src/**/*.rs",
-    "tests/**/*.rs",
-    "benches/**/*.rs",
-    "Cargo.toml",
-    "README.md",
-    "LICENSE*",
+  "src/**/*.rs",
+  "tests/**/*.rs",
+  "benches/**/*.rs",
+  "Cargo.toml",
+  "README.md",
+  "LICENSE*",
 ]
 
 [package.metadata.dist]
@@ -125,4 +125,3 @@ cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
 cast_precision_loss = "allow"
 doc_markdown = "allow"
-
