@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "GitHub Discussions"
+    url: "https://github.com/zx0r/xstory/discussions"
+    about: "Ask architectural questions, discuss shell integrations, or share custom workflows"

@@ -1,0 +1,17 @@
+# Codecov Configuration
+# Standard: Principal Systems Architect
+
+coverage:
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 2%
+    patch:
+      default:
+        target: 80%
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: "default"
+  require_changes: false

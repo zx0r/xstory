@@ -98,23 +98,10 @@
       datasourceTemplate: "custom.rustup-miri-history",
       versioningTemplate: "regex:^nightly-(?<major>\\d{4})-(?<minor>\\d{2})-(?<patch>\\d{2})$",
     },
-    {
-      // 4.3. Hermetic Headless Neovim Runtime for E2E Test Suite
-      // CONTRACT: Tracks official upstream GitHub releases of neovim/neovim
-      customType: "regex",
-      description: "Track Neovim release tag in workflow environment",
-      managerFilePatterns: ["/\\.github/workflows/.+\\.ya?ml$/"],
-      matchStrings: [
-        "NVIM_VERSION:\\s*[\"'](?<currentValue>v\\d+\\.\\d+\\.\\d+)[\"']",
-      ],
-      depNameTemplate: "neovim/neovim",
-      datasourceTemplate: "github-releases",
-      versioningTemplate: "semver",
-    },
   ],
 
   // ---------------------------------------------------------------------------
-  // 5. Package Rules: Atomic Batches & Cryptographic Checksum Recalculation
+  // 5. Package Rules: Atomic Batches
   // ---------------------------------------------------------------------------
   packageRules: [
     {
@@ -122,18 +109,9 @@
       // Reduces CI compute load, avoids PR notification fatigue, and tests interoperability
       description: "Group GitHub Actions SHA digests and CI CLI tools into a single weekly PR",
       matchManagers: ["github-actions", "custom.regex"],
-      excludeDepNames: ["neovim/neovim"],
       groupName: "ci-toolchain-and-actions",
       groupSlug: "ci-toolchain",
       labels: ["ci", "dependencies"],
-    },
-    {
-      // Neovim E2E Runtime: Tracks upstream release tags
-      // Checksum is verified cryptographically via sha256sum in Gate 3
-      description: "Track Neovim release tag in workflow environment",
-      matchDepNames: ["neovim/neovim"],
-      groupName: "neovim-e2e-runtime",
-      labels: ["ci", "e2e"],
     },
   ],
 }
