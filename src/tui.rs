@@ -34,6 +34,24 @@ pub enum FocusedPanel {
     Preview,
 }
 
+impl FocusedPanel {
+    #[must_use]
+    pub const fn up(self) -> Self {
+        match self {
+            Self::Query => Self::Preview,
+            Self::Preview | Self::History => Self::History,
+        }
+    }
+
+    #[must_use]
+    pub const fn down(self) -> Self {
+        match self {
+            Self::History => Self::Preview,
+            Self::Preview | Self::Query => Self::Query,
+        }
+    }
+}
+
 /// The entire TUI state. Owned by `run_tui`, mutated in-place.
 #[derive(Debug)]
 pub struct Dashboard<'a> {
@@ -248,7 +266,7 @@ impl<'a> Dashboard<'a> {
     pub fn preview_height(&self, arena: &Arena, area_height: u16, area_width: u16) -> u16 {
         match self.preview_mode {
             PreviewMode::Fixed => {
-                if area_height >= 14 {
+                if area_height >= 18 {
                     PREVIEW_PANEL_HEIGHT
                 } else {
                     PREVIEW_PANEL_HEIGHT.min(area_height.saturating_sub(8))
@@ -416,7 +434,7 @@ fn format_thousands(n: usize) -> String {
 
 pub const TOP_BREATHING_ROOM: u16 = 1;
 pub const ACTION_BAR_HEIGHT: u16 = 1;
-pub const PREVIEW_PANEL_HEIGHT: u16 = 6;
+pub const PREVIEW_PANEL_HEIGHT: u16 = 10;
 pub const QUERY_BAR_HEIGHT: u16 = 3;
 pub const HORIZONTAL_MARGIN: u16 = 1;
 pub const PANEL_PADDING_HORIZONTAL: u16 = 1;
@@ -971,7 +989,7 @@ pub fn render_frame(
     let p_scroll = (dash.preview_scroll as u16).min(max_scroll);
 
     if visual_rows > p_inner.height as usize {
-        let scroll_str = format!("{}/{} • Shift+↓/↑", p_scroll + 1, visual_rows);
+        let scroll_str = format!("{}/{} • ↓/↑", p_scroll + 1, visual_rows);
         preview_block = preview_block
             .title_bottom(Line::from(bracketed(scroll_str, p_border)).alignment(Alignment::Right));
     }
@@ -1081,23 +1099,29 @@ pub fn run_tui(
                     dash.dirty = true;
                 }
                 (KeyModifiers::NONE, KeyCode::Up) => {
-                    dash.focus = FocusedPanel::History;
-                    dash.move_selection(1);
+                    if dash.focus == FocusedPanel::Preview {
+                        dash.scroll_preview(-1, 1000);
+                    } else {
+                        dash.focus = FocusedPanel::History;
+                        dash.move_selection(1);
+                    }
                     dash.dirty = true;
                 }
                 (KeyModifiers::NONE, KeyCode::Down) => {
-                    dash.focus = FocusedPanel::History;
-                    dash.move_selection(-1);
+                    if dash.focus == FocusedPanel::Preview {
+                        dash.scroll_preview(1, 1000);
+                    } else {
+                        dash.focus = FocusedPanel::History;
+                        dash.move_selection(-1);
+                    }
                     dash.dirty = true;
                 }
                 (KeyModifiers::SHIFT, KeyCode::Up) => {
-                    dash.focus = FocusedPanel::Preview;
-                    dash.scroll_preview(-1, 1000);
+                    dash.focus = dash.focus.up();
                     dash.dirty = true;
                 }
                 (KeyModifiers::SHIFT, KeyCode::Down) => {
-                    dash.focus = FocusedPanel::Preview;
-                    dash.scroll_preview(1, 1000);
+                    dash.focus = dash.focus.down();
                     dash.dirty = true;
                 }
                 (KeyModifiers::CONTROL, KeyCode::Char('c'))
@@ -1307,6 +1331,35 @@ mod tests {
 
         dash.move_selection(-10);
         assert_eq!(dash.selected, 0); // clamped to 0
+    }
+
+    #[test]
+    fn directional_panel_navigation() {
+        let (_dir, arena) = make_test_arena(&["1000\t50\t0\t/home\tls"]);
+        let mut dash = Dashboard::new(Theme::Dark, 80, 24, None, &arena);
+        assert_eq!(dash.focus, FocusedPanel::Query);
+
+        // Shift+Up moves Query -> Preview -> History
+        dash.focus = dash.focus.up();
+        assert_eq!(dash.focus, FocusedPanel::Preview);
+
+        dash.focus = dash.focus.up();
+        assert_eq!(dash.focus, FocusedPanel::History);
+
+        // Top clamp
+        dash.focus = dash.focus.up();
+        assert_eq!(dash.focus, FocusedPanel::History);
+
+        // Shift+Down moves History -> Preview -> Query
+        dash.focus = dash.focus.down();
+        assert_eq!(dash.focus, FocusedPanel::Preview);
+
+        dash.focus = dash.focus.down();
+        assert_eq!(dash.focus, FocusedPanel::Query);
+
+        // Bottom clamp
+        dash.focus = dash.focus.down();
+        assert_eq!(dash.focus, FocusedPanel::Query);
     }
 
     #[test]
@@ -1626,7 +1679,7 @@ mod tests {
             make_test_arena(&["1000\t50\t0\t/home\tline1\\nline2\\nline3\\nline4\\nline5"]);
         let mut dash = Dashboard::new(Theme::Dark, 80, 30, None, &arena);
 
-        // Default is Fixed: always returns PREVIEW_PANEL_HEIGHT (6)
+        // Default is Fixed: always returns PREVIEW_PANEL_HEIGHT (10)
         assert_eq!(dash.preview_mode, PreviewMode::Fixed);
         assert_eq!(dash.preview_height(&arena, 30, 80), PREVIEW_PANEL_HEIGHT);
 

@@ -1,6 +1,12 @@
 # Justfile - Systems Engineering Command Orchestrator
 # Architecture: Minimalist Unix Shell History Engine
 
+set dotenv-load := false
+set export := false
+
+bin := "xstory"
+target_dir := "target"
+
 default: qa
 
 # ==============================================================================
@@ -11,7 +17,7 @@ default: qa
 fmt:
     cargo fmt --all
 
-# Strict read-only check for CI & Git hooks (fails with exit code 1 on diff)
+# Strict read-only check for CI & Git hooks (fails on diff)
 fmt-check:
     cargo fmt --all -- --check
 
@@ -19,18 +25,30 @@ fmt-check:
 qa: fmt-check
     cargo clippy --all-targets --all-features -- -D warnings
 
-# Run all process-isolated tests
+# Run all process-isolated tests via nextest
 test:
-    cargo t
+    cargo nextest run --all-targets
+
+# Run tests via standard cargo test harness (fallback/doc tests)
+test-all:
+    cargo test --all-targets --all-features
 
 # Run end-to-end integration tests
 e2e:
-    cargo e2e
+    cargo test --test e2e
+
+# Run performance benchmarks via Criterion
+bench:
+    cargo bench
 
 # Run source-based LLVM coverage suite
 coverage:
-    @mkdir -p target/llvm-cov
-    cargo llvm-cov nextest --profile ci --lcov --output-path target/llvm-cov/lcov.info
+    @mkdir -p {{ target_dir }}/llvm-cov
+    cargo llvm-cov nextest --profile ci --lcov --output-path {{ target_dir }}/llvm-cov/lcov.info
+
+# Continuous background compilation & testing
+watch:
+    bacon
 
 # ==============================================================================
 # Domain 2: Production Artifacts & Distribution
@@ -39,18 +57,19 @@ coverage:
 # Build size-optimized micro-binary (< 380 KB)
 release-small:
     cargo build --profile release-small
-    @ls -lh target/release-small/xstory
+    @ls -lh {{ target_dir }}/release-small/{{ bin }}
 
 # Build full-throughput production release
 release:
     cargo build --release
+    @ls -lh {{ target_dir }}/release/{{ bin }}
 
 # Run local cargo-dist release packaging dry run
 dist-plan:
     dist plan
 
 # ==============================================================================
-# Domain 3: Supply Chain & Workflow Verification
+# Domain 3: DevSecOps, Supply Chain & Workflows
 # ==============================================================================
 
 # Run supply chain security audit (RustSec, bans, licenses)
@@ -74,6 +93,17 @@ lint-workflows:
 miri:
     env MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --lib
 
+# Verify SemVer API backwards compatibility
+semver:
+    cargo semver-checks check-release
+
+# Run mutation testing suite
+mutants:
+    cargo mutants
+
+# Single-command composite gate (equivalent to local CI pass)
+check-all: qa test audit audit-secrets machete lint-workflows
+
 # ==============================================================================
 # Domain 4: Tooling & Git Hooks
 # ==============================================================================
@@ -88,6 +118,6 @@ clean:
 
 # Install complete developer toolchain into workstation
 setup-tools:
-    brew install bacon sccache cargo-deny cargo-llvm-cov cargo-dist cargo-mutants cargo-binstall lefthook cocogitto actionlint zizmor gitleaks
+    brew install bacon sccache cargo-deny cargo-llvm-cov cargo-nextest cargo-dist cargo-mutants cargo-binstall lefthook cocogitto actionlint zizmor gitleaks
     cargo binstall -y cargo-machete cargo-semver-checks
     rustup toolchain install nightly --component miri,rust-src
