@@ -850,12 +850,10 @@ pub fn render_frame(
     let h_inner = history_block.inner(layout.history);
     let (h_h, h_w) = (h_inner.height as usize, h_inner.width as usize);
     let sel_bg = match dash.theme {
-        Theme::Dark => Color::Indexed(237),
-        Theme::Light => Color::Gray,
-        Theme::Catppuccin => Color::Rgb(49, 50, 68),
-        Theme::TokyoNight => Color::Rgb(47, 51, 77),
-        Theme::Gruvbox => Color::Rgb(60, 56, 54),
-        Theme::Nord => Color::Rgb(59, 66, 82),
+        Theme::Light => Color::Indexed(254),
+        Theme::Catppuccin | Theme::TokyoNight => Color::Indexed(236),
+        Theme::Dark | Theme::Gruvbox | Theme::Nord => Color::Indexed(237),
+        Theme::Cake => Color::Indexed(235),
     };
 
     let history_lines: Vec<Line<'_>> = (0..h_h)
@@ -968,10 +966,14 @@ pub fn render_frame(
         Scope::Global => "G: ^R",
         Scope::Local => "L: ^R",
     };
+    let theme_tag = format!("{}: ^T", dash.theme.name());
     let q_border = panel_border_color(query_focus);
+    let mut title_spans = bracketed(scope_tag, q_border);
+    title_spans.push(Span::raw(" "));
+    title_spans.extend(bracketed(theme_tag, q_border));
     let query_block = create_panel_block(query_focus)
         .padding(Padding::horizontal(1))
-        .title_top(Line::from(bracketed(scope_tag, q_border)).alignment(Alignment::Right));
+        .title_top(Line::from(title_spans).alignment(Alignment::Right));
     let q_inner = query_block.inner(layout.query);
     let line = if dash.query.is_empty() {
         Line::from(vec![Span::styled(
@@ -1055,6 +1057,10 @@ pub fn run_tui(
                     dash.toggle_scope();
                     dash.dedup_total = arena.scope_indices(dash.scope).len();
                     dash.on_query_mutated(arena);
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('t' | 'T')) => {
+                    dash.theme = dash.theme.next();
+                    dash.dirty = true;
                 }
                 (KeyModifiers::NONE, KeyCode::Left) => {
                     dash.focus = FocusedPanel::Query;
@@ -1277,6 +1283,27 @@ mod tests {
         dash.result = search::search(&arena, &dash.query, dash.scope);
         assert_eq!(dash.result.indices.len(), 1);
         assert_eq!(arena.cmd_str(dash.result.indices[0]), "ls");
+    }
+
+    #[test]
+    fn theme_toggle_cycles_correctly() {
+        let (_dir, arena) = make_test_arena(&["1000\t50\t0\t/home\tls"]);
+        let mut dash = Dashboard::new(Theme::Dark, 80, 24, None, &arena);
+        assert_eq!(dash.theme, Theme::Dark);
+        dash.theme = dash.theme.next();
+        assert_eq!(dash.theme, Theme::Light);
+        dash.theme = dash.theme.next();
+        assert_eq!(dash.theme, Theme::Catppuccin);
+        dash.theme = dash.theme.next();
+        assert_eq!(dash.theme, Theme::TokyoNight);
+        dash.theme = dash.theme.next();
+        assert_eq!(dash.theme, Theme::Gruvbox);
+        dash.theme = dash.theme.next();
+        assert_eq!(dash.theme, Theme::Nord);
+        dash.theme = dash.theme.next();
+        assert_eq!(dash.theme, Theme::Cake);
+        dash.theme = dash.theme.next();
+        assert_eq!(dash.theme, Theme::Dark);
     }
 
     #[test]

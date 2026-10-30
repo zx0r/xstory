@@ -80,7 +80,7 @@ pub enum Scope {
     Local,
 }
 
-/// Terminal color scheme and syntax highlighting preset.
+/// Terminal color scheme.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Theme {
     #[default]
@@ -90,6 +90,37 @@ pub enum Theme {
     TokyoNight,
     Gruvbox,
     Nord,
+    Cake,
+}
+
+impl Theme {
+    /// Cycle to the next theme.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Dark => Self::Light,
+            Self::Light => Self::Catppuccin,
+            Self::Catppuccin => Self::TokyoNight,
+            Self::TokyoNight => Self::Gruvbox,
+            Self::Gruvbox => Self::Nord,
+            Self::Nord => Self::Cake,
+            Self::Cake => Self::Dark,
+        }
+    }
+
+    /// Canonical lowercase theme name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::Catppuccin => "catppuccin",
+            Self::TokyoNight => "tokyo-night",
+            Self::Gruvbox => "gruvbox",
+            Self::Nord => "nord",
+            Self::Cake => "cake",
+        }
+    }
 }
 
 impl std::str::FromStr for Theme {
@@ -103,6 +134,7 @@ impl std::str::FromStr for Theme {
             "tokyo-night" | "tokyonight" | "tokyo_night" => Ok(Self::TokyoNight),
             "gruvbox" => Ok(Self::Gruvbox),
             "nord" => Ok(Self::Nord),
+            "cake" => Ok(Self::Cake),
             _ => Err(()),
         }
     }
@@ -570,7 +602,7 @@ impl Config {
                 cfg.preview_mode = PreviewMode::Dynamic;
             }
         }
-        if let Ok(val) = std::env::var("XSTORY_THEME").or_else(|_| std::env::var("XSTORY_PRESET"))
+        if let Ok(val) = std::env::var("XSTORY_THEME")
             && let Ok(t) = val.parse::<Theme>()
         {
             cfg.theme = Some(t);
@@ -621,7 +653,7 @@ impl Config {
                 }
                 ("preview" | "preview_mode", "fixed") => cfg.preview_mode = PreviewMode::Fixed,
                 ("preview" | "preview_mode", "dynamic") => cfg.preview_mode = PreviewMode::Dynamic,
-                ("theme" | "preset", v) => {
+                ("theme", v) => {
                     if let Ok(t) = v.parse::<Theme>() {
                         cfg.theme = Some(t);
                     }
@@ -900,5 +932,32 @@ mod tests {
         );
         assert_eq!(cfg.scroll_off, 8);
         assert_eq!(cfg.exclude_commands, vec!["cd", "ls"]);
+    }
+
+    #[test]
+    fn theme_cycle_and_parsing() {
+        assert_eq!("cake".parse::<Theme>(), Ok(Theme::Cake));
+        assert_eq!("CAKE".parse::<Theme>(), Ok(Theme::Cake));
+        assert_eq!(Theme::Cake.name(), "cake");
+
+        let mut t = Theme::Dark;
+        let mut visited = vec![t];
+        for _ in 0..6 {
+            t = t.next();
+            visited.push(t);
+        }
+        assert_eq!(t.next(), Theme::Dark);
+        assert_eq!(
+            visited,
+            vec![
+                Theme::Dark,
+                Theme::Light,
+                Theme::Catppuccin,
+                Theme::TokyoNight,
+                Theme::Gruvbox,
+                Theme::Nord,
+                Theme::Cake,
+            ]
+        );
     }
 }

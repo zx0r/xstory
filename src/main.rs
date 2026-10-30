@@ -432,22 +432,19 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
                 .next()
                 .ok_or(Error::InvalidArgs("missing argument for --preview"))?;
             preview = Some(parse_preview_mode(val)?);
-        } else if let Some(val) = arg
-            .strip_prefix("--theme=")
-            .or_else(|| arg.strip_prefix("--preset="))
-        {
+        } else if let Some(val) = arg.strip_prefix("--theme=") {
             theme = Some(val.parse::<arena::Theme>().map_err(|()| {
                 Error::InvalidArgs(
-                    "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord)",
+                    "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord, cake)",
                 )
             })?);
-        } else if arg == "-t" || arg == "--theme" || arg == "--preset" {
+        } else if arg == "-t" || arg == "--theme" {
             let val = it
                 .next()
                 .ok_or(Error::InvalidArgs("missing argument for --theme"))?;
             theme = Some(val.parse::<arena::Theme>().map_err(|()| {
                 Error::InvalidArgs(
-                    "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord)",
+                    "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord, cake)",
                 )
             })?);
         } else {
@@ -531,22 +528,19 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
                         .next()
                         .ok_or(Error::InvalidArgs("missing argument for --preview"))?;
                     preview = Some(parse_preview_mode(val)?);
-                } else if let Some(val) = a
-                    .strip_prefix("--theme=")
-                    .or_else(|| a.strip_prefix("--preset="))
-                {
+                } else if let Some(val) = a.strip_prefix("--theme=") {
                     theme = Some(val.parse::<arena::Theme>().map_err(|()| {
                         Error::InvalidArgs(
-                            "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord)",
+                            "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord, cake)",
                         )
                     })?);
-                } else if a == "-t" || a == "--theme" || a == "--preset" {
+                } else if a == "-t" || a == "--theme" {
                     let val = iter
                         .next()
                         .ok_or(Error::InvalidArgs("missing argument for --theme"))?;
                     theme = Some(val.parse::<arena::Theme>().map_err(|()| {
                         Error::InvalidArgs(
-                            "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord)",
+                            "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord, cake)",
                         )
                     })?);
                 } else if !a.starts_with('-') && q.is_none() {
@@ -757,7 +751,7 @@ mod tests {
             Ok(cli) if cli.theme == Some(arena::Theme::Catppuccin)
         ));
         assert!(matches!(
-            parse_args(&["--preset=tokyo-night".into()]),
+            parse_args(&["--theme=tokyo-night".into()]),
             Ok(cli) if cli.theme == Some(arena::Theme::TokyoNight)
         ));
         assert!(matches!(
