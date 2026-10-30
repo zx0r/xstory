@@ -1,17 +1,25 @@
 # =============================================================================
-#                 QUALITY GATES CONTINUOUS INTEGRATION PIPELINE
+# CI Quality Gates Specification
 # =============================================================================
-# Level: Principal Systems Architect & DevSecOps Engineer
-# Standards: OpenSSF Scorecard Hardened · Hermetic Toolchain · SLSA Level 3
-# Architecture: 5-Gate Directed Acyclic Graph (DAG) with Single Protected Aggregator
-# Guarantees:
-#   1. Complete Supply Chain Integrity (SHA-pinned immutable actions, verified egress)
-#   2. Cache Poisoning Prevention (Isolated cache namespaces across compilation profiles)
-#   3. Zero Memory-Model & Concurrency UB (Miri Tree Borrows & strict provenance)
-#   4. Process Isolation & E2E Verification (Sub-millisecond shell history engine)
+# Standards:
+#   - OpenSSF Scorecard L4: Immutable commit SHA pinning, root permissions: {}
+#   - StepSecurity Harden-Runner: Kernel-level eBPF egress audit (audit policy)
+#   - Conventional Commits 1.0.0: Specification enforcement via Cocogitto
+# Toolchain & Static Verification:
+#   - actionlint: Actions workflow AST validation with embedded ShellCheck
+#   - gitleaks: High-entropy secret and credential detection across Git deltas
+#   - cargo fmt & cargo clippy: Strict linting (-D warnings, all-targets, all-features)
+#   - cargo-machete: Unused crate dependency detection via AST analysis
+#   - cargo-deny: RustSec advisories, SPDX license compliance, ban & source policy
+# Execution, Coverage & Memory Safety:
+#   - cargo-nextest: Process-isolated unit and integration test runner
+#   - cargo-llvm-cov: Source-based code coverage instrumentation and threshold gate
+#   - cargo-miri: Tree Borrows aliasing model, strict provenance, alignment validation
+# Topology:
+#   - Parallelized DAG: lint-workflows -> {fast-checks, security-audit} -> {tests, miri} -> ci-gate
 # =============================================================================
 
-name: "CI Quality Gates"
+name: "CI"
 
 on:
   push:
@@ -22,8 +30,7 @@ on:
   merge_group:
 
 # Least-privilege default permissions per OpenSSF Scorecard L4 mandate
-permissions:
-  contents: "read"
+permissions: {}
 
 # Concurrency Management:
 # - On Pull Requests: Cancels in-progress runs when new commits arrive to conserve runners.
@@ -37,6 +44,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: "always"
   CARGO_INCREMENTAL: "0" # Disable incremental compilation to optimize CI cache hit ratios & artifact size
+  # Pinned nightly toolchain
   MIRI_NIGHTLY: "nightly-2026-10-28"
 
 defaults:
@@ -45,14 +53,62 @@ defaults:
 
 jobs:
   # ----------------------------------------------------------------------------
+  # Gate 0: Workflow Syntax, Schema & Security SAST (< 15s)
+  # ----------------------------------------------------------------------------
+  # Purpose: Fast fail-closed validation of all GitHub Actions workflows and shell scripts
+  lint-workflows:
+    name: "🛡️ [Gate 0] Workflow Syntax & Security SAST"
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 5
+    permissions:
+      contents: "read"
+    steps:
+      - name: "Harden Runner (Egress Audit)"
+        uses: "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
+        with:
+          egress-policy: "audit"
+
+      - name: "Checkout Source Code (Full History for Audit & CC)"
+        uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: "Verify Workflow Syntax & ShellCheck (actionlint)"
+        uses: "eifinger/actionlint-action@1fc89649be682d16ec5cf65ea16e269eb88d3982" # v1.10.2
+
+      # NOTE: zizmorcore/zizmor-action relies on pip/PyPI to download Python wheels at runtime,
+      # violating zero-trust egress block policies in a pure Rust runner environment.
+      # Workflow security SAST is enforced offline pre-commit via lefthook (zizmor --offline).
+      # - name: "Audit Workflow Security Patterns (zizmor)"
+      #   uses: "zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b" # v0.8.0
+      #   with:
+      #     advanced-security: false
+
+      - name: "Scan Secrets & Credentials (gitleaks)"
+        uses: "gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e" # v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Verify Conventional Commits (Cocogitto)"
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: "cocogitto/cocogitto-action@390bda87a19bf627e03ad075c67a11e9ddbb7547" # v4
+        with:
+          command: "check"
+          args: "--from-latest-tag"
+
+  # ----------------------------------------------------------------------------
   # Gate 1: Fast Static Verification (< 45s feedback SLA)
   # ----------------------------------------------------------------------------
   # Purpose: Fast-fail validation on formatting, lints, and dependency hygiene
   # Optimization: Executes zero-compilation AST checks before downloading multi-MB caches
   fast-checks:
     name: "🛡️ [Gate 1] Lint, Format & Hygiene"
-    runs-on: "ubuntu-24.04"
+    needs: ["lint-workflows"]
+    runs-on: "ubuntu-latest"
     timeout-minutes: 10
+    permissions:
+      contents: "read"
     steps:
       # StepSecurity Harden-Runner: Audits and enforces outbound network boundaries
       - name: "Harden Runner (Egress Audit)"
@@ -84,13 +140,8 @@ jobs:
       - name: "Introspect Pinned Rust Toolchain"
         run: "rustup show"
 
-      # Primary compiler artifact cache (Profile: Check/Clippy)
-      # Uses unique shared-key to prevent pollution from coverage or test builds
-      - name: "Setup Rust Cache (Check Profile)"
-        uses: "Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6" # v2.7.8
-        with:
-          shared-key: "gate1-clippy"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # NOTE: Zero-dependency crate compiles in < 0.4s on 4-core runners.
+      # Swatinem/rust-cache removed to eliminate ~10s of archive upload/download overhead.
 
       # Strict Clippy Static Analysis: Denies all warnings across workspace and tests
       # Enforces --locked to guarantee hermetic builds against Cargo.lock
@@ -110,8 +161,11 @@ jobs:
   # approved open-source licenses, and trusted crate sources
   security-audit:
     name: "🔐 [Gate 2] Supply Chain & License Audit"
-    runs-on: "ubuntu-24.04"
+    needs: ["lint-workflows"]
+    runs-on: "ubuntu-latest"
     timeout-minutes: 10
+    permissions:
+      contents: "read"
     steps:
       - name: "Harden Runner (Egress Audit)"
         uses: "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
@@ -131,14 +185,14 @@ jobs:
           arguments: "--locked --all-features"
 
   # ----------------------------------------------------------------------------
-  # Gate 3: Test Execution & LLVM Source Coverage (Nextest + Neovim E2E)
+  # Gate 3: Test Execution & LLVM Source Coverage (Nextest + Integration E2E)
   # ----------------------------------------------------------------------------
   # Purpose: Process-isolated unit/integration tests with source-based LLVM coverage
   # Security: Withholds id-token permissions to eliminate OIDC leakage in test runners
   test-and-coverage:
     name: "🧪 [Gate 3] Process-Isolated Tests & Coverage"
-    needs: ["fast-checks", "security-audit"]
-    runs-on: "ubuntu-24.04"
+    needs: ["fast-checks"]
+    runs-on: "ubuntu-latest"
     timeout-minutes: 20
     permissions:
       contents: "read"
@@ -187,7 +241,7 @@ jobs:
 
       # Upload coverage report artifact for external ingestion & PR decoration
       - name: "Upload Coverage Artifact for External Reporting"
-        uses: "actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882" # v4.4.3
+        uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
         with:
           name: "lcov-report"
           path: "target/llvm-cov/lcov.info"
@@ -202,8 +256,10 @@ jobs:
   miri-verification:
     name: "🔬 [Gate 4] Memory Safety & Tree Borrows (Miri)"
     needs: ["fast-checks"]
-    runs-on: "ubuntu-24.04"
+    runs-on: "ubuntu-latest"
     timeout-minutes: 20
+    permissions:
+      contents: "read"
     steps:
       - name: "Harden Runner (Egress Audit)"
         uses: "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
@@ -227,7 +283,7 @@ jobs:
         uses: "Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6" # v2.7.8
         with:
           shared-key: "gate4-miri"
-          cache-directories: "/home/runner/.cache/miri"
+          cache-directories: "~/.cache/miri"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Memory Safety Verification:
@@ -245,19 +301,22 @@ jobs:
   # Gate 5: Single Branch Protection & Merge Queue Aggregator
   # ----------------------------------------------------------------------------
   # Purpose: Terminal aggregator job that evaluates all upstream gate results.
-  # Enterprise Benefit: Simplifies GitHub Branch Protection rulesets and Terraform IaC
+  # Architectural Benefit: Simplifies GitHub Branch Protection rulesets and Terraform IaC
   # by requiring only "ci-gate" as a mandatory status check.
   ci-gate:
     name: "✅ [Gate Final] All Quality Gates Passed"
-    needs: ["fast-checks", "security-audit", "test-and-coverage", "miri-verification"]
+    needs: ["lint-workflows", "fast-checks", "security-audit", "test-and-coverage", "miri-verification"]
     if: ${{ always() }}
-    runs-on: "ubuntu-24.04"
+    runs-on: "ubuntu-latest"
     timeout-minutes: 2
+    permissions: {}
     steps:
       - name: "Evaluate Upstream Gate Verdicts"
+        env:
+          GATE_FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
         run: |
           set -euo pipefail
-          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+          if [ "$GATE_FAILED" = "true" ]; then
             echo "::error::One or more mandatory quality gates failed or were cancelled."
             exit 1
           fi

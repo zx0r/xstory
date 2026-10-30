@@ -12,7 +12,7 @@ doc-valid-idents = [
     "GitHub", "GitLab", "OpenTelemetry", "PostgreSQL", "MySQL", "SQLite",
     "Kubernetes", "OAuth", "GraphQL", "WebAssembly", "JSON", "HTTP", "HTTPS",
     "TCP", "UDP", "TLS", "IPC", "API", "REST", "SIMD", "UUID", "MSRV", "RAII", "POSIX",
-    "SemVer", "XDG", "NVIM_APPNAME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"
+    "SemVer", "XDG", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"
 ]
 
 disallowed-types = [

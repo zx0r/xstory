@@ -1,10 +1,6 @@
 [store]
 dir = "target/nextest"
 
-# Concurrency pool for resource-heavy Neovim headless processes
-[test-groups.neovim-headless]
-max-threads = 4
-
 [profile.default]
 retries = 0
 slow-timeout = { period = "30s", terminate-after = 2 }
@@ -15,7 +11,6 @@ fail-fast = true
 # Active for both local development loop and CI
 [[profile.default.overrides]]
 filter = "binary(e2e)"
-test-group = "neovim-headless"
 slow-timeout = { period = "45s", terminate-after = 2 }
 leak-timeout = "1s"
 

@@ -1,0 +1,39 @@
+# cog.toml - Standard Conventional Commits 1.0.0 & SemVer Orchestration
+# Schema: https://docs.cocogitto.io/cog-schema.json
+
+branch_whitelist = ["main"]
+ignore_merge_commits = true
+ignore_fixup_commits = true
+tag_prefix = "v"
+skip_ci = "[skip ci]"
+
+pre_bump_hooks = [
+    "cargo fmt --all -- --check",
+    "cargo clippy -- -D warnings",
+    "cargo test",
+]
+
+post_bump_hooks = [
+    "git push",
+    "git push origin {{version_tag}}",
+]
+
+[commit_types]
+feat     = { changelog_title = "Features", bump_minor = true }
+fix      = { changelog_title = "Bug Fixes", bump_patch = true }
+perf     = { changelog_title = "Performance Improvements", bump_patch = true }
+refactor = { changelog_title = "Refactoring" }
+docs     = { changelog_title = "Documentation", omit_from_changelog = false }
+style    = { changelog_title = "Styling", omit_from_changelog = true }
+test     = { changelog_title = "Tests", omit_from_changelog = true }
+build    = { changelog_title = "Build System", omit_from_changelog = false }
+ci       = { changelog_title = "Continuous Integration", omit_from_changelog = true }
+chore    = { changelog_title = "Miscellaneous Chores", omit_from_changelog = true }
+revert   = { changelog_title = "Reverts", bump_patch = true }
+
+[changelog]
+path = "CHANGELOG.md"
+template = "remote"
+remote = "github.com"
+owner = "zx0r"
+repository = "xstory"

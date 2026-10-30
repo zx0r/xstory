@@ -1,0 +1,87 @@
+# lefthook.yml
+# Latency: pre-commit < 250ms | commit-msg < 10ms | pre-push ~ 3-5s
+
+output:
+  - meta
+  - summary
+  - failure
+
+# ------------------------------------------------------------------------------
+# Stage 1: Fast In-Memory Hygiene & Secret Guard (< 250ms)
+# ------------------------------------------------------------------------------
+pre-commit:
+  parallel: true
+  commands:
+    # 1. Rust Code Formatting: Auto-formats and re-stages without failing the commit
+    cargo-fmt:
+      glob: "*.rs"
+      run: cargo fmt --all
+      stage_fixed: true
+
+    # 2. Secret Detection: Scans staged delta against 160+ signatures & entropy
+    gitleaks:
+      run: gitleaks protect --staged --no-banner
+      fail_text: ":: [Lefthook] Secret detected in staged changes! Run 'gitleaks protect --staged -v'."
+
+    # 3. CI Workflow Syntax: Evaluates only when workflow definitions change
+    actionlint:
+      glob: ".github/workflows/*.{yml,yaml}"
+      run: actionlint -color {staged_files}
+      fail_text: ":: [Lefthook] Workflow syntax error detected by actionlint."
+
+    # 4. CI Security Pattern Audit: Offline AST security lint
+    zizmor:
+      glob: ".github/workflows/*.{yml,yaml}"
+      run: zizmor --offline --min-severity high .github/workflows/
+      fail_text: ":: [Lefthook] High-severity workflow vulnerability detected by zizmor."
+
+# ------------------------------------------------------------------------------
+# Stage 2: Conventional Commits Specification (< 10ms)
+# ------------------------------------------------------------------------------
+commit-msg:
+  commands:
+    cog-verify:
+      run: cog verify --file {1}
+      fail_text: |
+        :: [Lefthook] Invalid Conventional Commit message.
+        Format  : <type>(<scope>): <subject>
+        Types   : feat, fix, perf, refactor, docs, style, test, build, ci, chore, revert
+        Scopes  : core, cli, config, history, store, tui, security, ci, deps, readme, release, renovate
+
+# ------------------------------------------------------------------------------
+# Stage 3: Full Compiler, Security & Test Gates (Pre-Push: 3-5s)
+# ------------------------------------------------------------------------------
+pre-push:
+  parallel: false
+  commands:
+    # 1. Strict Compiler Linting across all targets
+    clippy:
+      run: cargo clippy --all-targets -- -D warnings
+      fail_text: ":: [Lefthook] Clippy warnings detected. Resolve before pushing."
+
+    # 2. Supply Chain Audit (RustSec CVEs, license compliance, banned crates)
+    deny:
+      run: cargo deny check
+      fail_text: ":: [Lefthook] Supply chain policy violation detected by cargo-deny."
+
+    # 3. Process-Isolated Test Suite
+    test:
+      run: cargo test
+      fail_text: ":: [Lefthook] Test suite failure. Run 'cargo test' locally to inspect."
+
+# ------------------------------------------------------------------------------
+# Stage 4: Dependency Drift Notification (Post-Merge / Checkout)
+# ------------------------------------------------------------------------------
+post-merge:
+  commands:
+    deps-alert:
+      glob: "{Cargo.toml,Cargo.lock}"
+      run: |
+        echo ":: [Notice] Dependencies updated via merge. Consider checking 'cargo check'."
+
+post-checkout:
+  commands:
+    deps-alert:
+      glob: "{Cargo.toml,Cargo.lock}"
+      run: |
+        echo ":: [Notice] Switched branch with modified Cargo dependencies."

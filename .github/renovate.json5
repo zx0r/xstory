@@ -1,14 +1,15 @@
 // =============================================================================
-// ENTERPRISE DEPENDENCY AUTOMATION & SUPPLY CHAIN SECURITY SPECIFICATION
+// DEPENDENCY AUTOMATION & SUPPLY CHAIN SECURITY SPECIFICATION
 // =============================================================================
 // Standard: OpenSSF Scorecard L4 · Hermetic Toolchain · SLSA Level 3
 // Role: Autonomous Dependency Guardian & Automated Cryptographic Pinning
-// Target: nvimx (.github/workflows/*.yml & Cargo ecosystem)
+// Target: xstory (.github/workflows/*.yml & Cargo ecosystem)
 // =============================================================================
 
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   description: "Enterprise CI/CD & Rust Hermetic Toolchain Automation",
+  configMigration: false,
 
   // ---------------------------------------------------------------------------
   // 1. Core Presets & Security Baselines

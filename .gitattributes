@@ -35,9 +35,7 @@ dist-workspace.toml -linguist-detectable
 .gemini/** -linguist-detectable
 .serena/** -linguist-detectable
 
-# --- Scripts & Installers ---
-# Mark the installer script and completions as documentation/support.
-nvimx-installer.sh linguist-documentation
+# --- Shell Completions ---
 assets/completions/** linguist-documentation
 
 # --- Tests ---

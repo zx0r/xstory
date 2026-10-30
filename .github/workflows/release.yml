@@ -1,24 +1,25 @@
 # =============================================================================
-# MULTI-ARCH DISTRIBUTION & SUPPLY CHAIN PROVENANCE PIPELINE
+# Multi-Target Release & Supply Chain Provenance Pipeline
 # =============================================================================
-# Level: Principal Systems Architect & Release Engineer
-# Standards: SLSA Level 3 · OIDC Trusted Publishing · Sigstore Attestation
-# Engine: cargo-dist v0.33.1 · cargo-auditable RFC Standard
-# Target Matrix:
-#   - macOS (Apple Silicon arm64, Intel x86_64)
-#   - Linux (glibc x86_64/arm64, musl x86_64/arm64 static binaries)
-#   - Windows (MSVC x86_64/arm64)
-# Artifacts:
-#   - Self-updating binaries (xstory-update)
-#   - Cryptographic SHA-256 digests
-#   - Homebrew Tap Formula (zx0r/homebrew-tap/Formula/xstory.rb)
-#   - Universal Shell & PowerShell Installers
-#   - crates.io Package Publication via OIDC Workload Identity
+# Standards:
+#   - SLSA v1.1 Build Level 3: Non-forgeable cryptographic build provenance
+#   - Sigstore Keyless Signing: Ephemeral OIDC workload identity federation
+#   - CycloneDX 1.6 & SPDX 2.3: Machine-readable Software Bill of Materials (SBOM)
+#   - OpenSSF Scorecard L4: Root permissions: {}, immutable commit SHA pinning
+# Build & Binary Hardening:
+#   - cargo-dist: Deterministic cross-platform matrix packaging and archive bundling
+#   - cargo-auditable: Dependency graph metadata embedded into ELF/Mach-O binaries
+#   - actions/attest: Cryptographic in-toto attestations for binaries and SBOMs
+# Distribution Targets:
+#   - GitHub Releases: Platform archives, SHA-256 digests, and automated release notes
+#   - Crates.io: Trusted publishing via OpenID Connect (OIDC) token exchange
+#   - Homebrew: Automated formula generation and Git dispatch to tap repository
+# Topology:
+#   - Matrix DAG: plan -> [build-local-artifacts, build-global-artifacts] -> host -> publish
 # =============================================================================
 
 name: Release
-permissions:
-  "contents": "write"
+permissions: {}
 
 # This task will run whenever you push a git tag that looks like a version
 # like "1.0.0", "v0.1.0-prerelease.1", "my-app/0.1.0", "releases/v1.0.0", etc.
@@ -45,12 +46,14 @@ on:
   pull_request:
   push:
     tags:
-      - "**[0-9]+.[0-9]+.[0-9]+*"
+      - '**[0-9]+.[0-9]+.[0-9]+*'
 
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:
     runs-on: "ubuntu-latest"
+    permissions:
+      contents: "read"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
       tag: ${{ !github.event.pull_request && github.ref_name || '' }}
@@ -67,10 +70,7 @@ jobs:
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
         shell: bash
-        run:
-          "curl --proto '=https' --tlsv1.2 -LsSf
-          https://github.com/axodotdev/cargo-dist/releases/download/v0.33.1/cargo-dist-installer.sh
-          | sh"
+        run: "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.33.1/cargo-dist-installer.sh | sh"
       - name: Cache dist
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -82,8 +82,15 @@ jobs:
       # (PRs run on the *source* but secrets are usually on the *target* -- that's *good*
       # but also really annoying to build CI around when it needs secrets to work right.)
       - id: plan
+        env:
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          dist ${{ (!github.event.pull_request && format('host --steps=create --tag={0}', github.ref_name)) || 'plan' }} --output-format=json > plan-dist-manifest.json
+          if [ "$IS_PR" = "true" ]; then
+            dist plan --output-format=json > plan-dist-manifest.json
+          else
+            dist host --steps=create "--tag=$REF_NAME" --output-format=json > plan-dist-manifest.json
+          fi
           echo "dist ran successfully"
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
@@ -99,10 +106,7 @@ jobs:
     # Let the initial task tell us to not run (currently very blunt)
     needs:
       - plan
-    if:
-      ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null &&
-      (needs.plan.outputs.publishing == 'true' ||
-      fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload') }}
+    if: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null && (needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload') }}
     strategy:
       fail-fast: false
       # Target platforms/runners are computed by dist in create-release.
@@ -117,7 +121,6 @@ jobs:
       # - N "local" tasks that build each platform's binaries and platform-specific installers
       matrix: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix }}
     runs-on: ${{ matrix.runner }}
-    container: ${{ matrix.container && matrix.container.image || null }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/${{ join(matrix.targets, '-') }}-dist-manifest.json
@@ -138,12 +141,8 @@ jobs:
         run: |
           if ! command -v cargo > /dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           fi
-      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: ${{ join(matrix.targets, '-') }}
-          cache-provider: ${{ matrix.cache_provider }}
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
@@ -175,9 +174,11 @@ jobs:
         shell: bash
         run: |
           # Parse out what we just built and upload it to scratch storage
-          echo "paths<<EOF" >> "$GITHUB_OUTPUT"
-          dist print-upload-files-from-manifest --manifest dist-manifest.json >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          {
+            echo "paths<<EOF"
+            dist print-upload-files-from-manifest --manifest dist-manifest.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
       - name: "Upload artifacts"
@@ -194,6 +195,8 @@ jobs:
       - plan
       - build-local-artifacts
     runs-on: "ubuntu-latest"
+    permissions:
+      contents: "read"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
@@ -211,10 +214,7 @@ jobs:
       - name: Install cargo-cyclonedx
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` return non-0
-        run:
-          "curl --proto '=https' --tlsv1.2 -LsSf
-          https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.5/cargo-cyclonedx-installer.sh
-          | sh"
+        run: "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.5/cargo-cyclonedx-installer.sh | sh"
         shell: bash
       # Get all the local artifacts for the global tasks to use (for e.g. checksums)
       - name: Fetch local artifacts
@@ -230,9 +230,11 @@ jobs:
           echo "dist ran successfully"
 
           # Parse out what we just built and upload it to scratch storage
-          echo "paths<<EOF" >> "$GITHUB_OUTPUT"
-          jq --raw-output ".upload_files[]" dist-manifest.json >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          {
+            echo "paths<<EOF"
+            jq --raw-output ".upload_files[]" dist-manifest.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
       - name: Fix Homebrew Formula
@@ -303,7 +305,7 @@ jobs:
                 sha256 "#{linux_x86['actual_sha256']}"
               end
 
-              license "MIT OR Apache-2.0"
+              license "MIT"
 
               def install
                 bin.install "xstory"
@@ -319,26 +321,29 @@ jobs:
           puts "Successfully fixed Homebrew formula at #{formula_path}"
           EOF
 
+
+
+
       - id: cargo-cyclonedx
         shell: bash
         run: |
-          # Generate SBOM (.cdx.xml) files.
-          cargo cyclonedx -v
+            # Generate SBOM (.cdx.xml) files.
+            cargo cyclonedx -v
 
-          # Move all SBOM (.cdx.xml) files under target/distrib/ since
-          # we expect all artifacts to be in that folder.
-          find . -name '*.cdx.xml' -exec mv '{}' target/distrib/ ';'
+            # Move all SBOM (.cdx.xml) files under target/distrib/ since
+            # we expect all artifacts to be in that folder.
+            find . -name '*.cdx.xml' -exec mv '{}' target/distrib/ ';'
 
-          echo "paths<<EOF" >> "$GITHUB_OUTPUT"
-          find . -name '*.cdx.xml' | tee -a "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "paths<<EOF" >> "$GITHUB_OUTPUT"
+            find . -name '*.cdx.xml' | tee -a "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
       - name: "Upload artifacts"
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: artifacts-build-global
           path: |
             ${{ steps.cargo-dist.outputs.paths }}
-            ${{ steps.cargo-cyclonedx.output.paths }}
+            ${{ steps.cargo-cyclonedx.outputs.paths }}
             ${{ env.BUILD_MANIFEST_NAME }}
   # Determines if we should publish/announce
   host:
@@ -347,11 +352,9 @@ jobs:
       - build-local-artifacts
       - build-global-artifacts
     # Only run if we're "publishing", and only if plan, local and global didn't fail (skipped is fine)
-    if:
-      ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' &&
-      (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result ==
-      'success') && (needs.build-local-artifacts.result == 'skipped' ||
-      needs.build-local-artifacts.result == 'success') }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') }}
+    permissions:
+      contents: "write"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-latest"
@@ -377,8 +380,11 @@ jobs:
           merge-multiple: true
       - id: host
         shell: bash
+        env:
+          TAG_FLAG: ${{ needs.plan.outputs.tag-flag }}
         run: |
-          dist host ${{ needs.plan.outputs.tag-flag }} --steps=upload --steps=release --output-format=json > dist-manifest.json
+          # shellcheck disable=SC2086
+          dist host $TAG_FLAG --steps=upload --steps=release --output-format=json > dist-manifest.json
           echo "artifacts uploaded and released successfully"
           cat dist-manifest.json
           echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
@@ -401,31 +407,31 @@ jobs:
           rm -f artifacts/*-dist-manifest.json
       - name: Create GitHub Release
         env:
-          PRERELEASE_FLAG:
-            "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease'
-            || '' }}"
+          TAG: ${{ needs.plan.outputs.tag }}
+          PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
           ANNOUNCEMENT_TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
           ANNOUNCEMENT_BODY: "${{ fromJson(steps.host.outputs.manifest).announcement_github_body }}"
           RELEASE_COMMIT: "${{ github.sha }}"
         run: |
           # Write and read notes from a file to avoid quoting breaking things
-          echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
+          echo "$ANNOUNCEMENT_BODY" > "$RUNNER_TEMP/notes.txt"
 
-          gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+          # shellcheck disable=SC2086
+          gh release create "$TAG" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
   publish-homebrew-formula:
     needs:
       - plan
       - host
     runs-on: "ubuntu-latest"
+    permissions:
+      contents: "read"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PLAN: ${{ needs.plan.outputs.val }}
       GITHUB_USER: ${{ github.actor }}
       GITHUB_EMAIL: ${{ github.actor }}@users.noreply.github.com
-    if:
-      ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease ||
-      fromJson(needs.plan.outputs.val).publish_prereleases }}
+    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -448,7 +454,7 @@ jobs:
 
           for release in $(echo "$PLAN" | jq --compact-output '.releases[] | select([.artifacts[] | endswith(".rb")] | any)'); do
             filename=$(echo "$release" | jq '.artifacts[] | select(endswith(".rb"))' --raw-output)
-            name=$(echo "$filename" | sed "s/\.rb$//")
+            name="${filename%.rb}"
             version=$(echo "$release" | jq .app_version --raw-output)
 
             export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
@@ -459,7 +465,7 @@ jobs:
             git add "Formula/${filename}"
             git commit -m "${name} ${version}"
           done
-          git push
+          git push origin HEAD:main
 
   publish-crates-io:
     name: Publish to crates.io
@@ -469,11 +475,8 @@ jobs:
     runs-on: ubuntu-latest
     # Run only if the plan includes publishing and it's not a draft/prerelease build
     # (unless prerelease publication is explicitly allowed)
-    if:
-      ${{ needs.plan.outputs.publishing == 'true' &&
-      (!fromJson(needs.plan.outputs.val).announcement_is_prerelease ||
-      fromJson(needs.plan.outputs.val).publish_prereleases) }}
-
+    if: ${{ needs.plan.outputs.publishing == 'true' && (!fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases) }}
+    
     # =========================================================================
     # 📚 OIDC TRUSTED PUBLISHING MANUAL (Best Practice)
     # =========================================================================
@@ -503,35 +506,37 @@ jobs:
     # 5. Environment name: `crates.io` (Must match Phase 2).
     #
     # --- PHASE 4: Workflow Activation ----------------------------------------
-    # UNCOMMENT the `environment` and `permissions` blocks below, and replace
+    # UNCOMMENT the `environment` and `permissions` blocks below, and replace 
     # the dummy `echo` script with `cargo publish`.
     # =========================================================================
-
+    
     # [UNCOMMENT AFTER SETUP]
     environment:
       name: crates.io
       url: https://crates.io/crates/${{ github.event.repository.name }}
     permissions:
-      contents: read # Required to checkout the code
-      id-token: write # Required to request JWT token from GitHub OIDC
-
+       contents: read    # Required to checkout the code
+       id-token: write   # Required to request JWT token from GitHub OIDC
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
+        
       - name: Install Rust toolchain
         run: rustup show
-
+       
       - name: Authenticate with crates.io
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
         id: auth
-
+        
       - name: Publish Package
         shell: bash
         run: cargo publish
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}   
+        
   announce:
     name: Announce Release
     needs:
@@ -542,12 +547,10 @@ jobs:
     # Use `always()` to wait for all publication jobs.
     # Allow skipping Homebrew and crates.io (e.g. for local test builds),
     # but `host` must complete successfully.
-    if:
-      ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result ==
-      'skipped' || needs.publish-homebrew-formula.result == 'success') &&
-      (needs.publish-crates-io.result == 'skipped' || needs.publish-crates-io.result == 'success')
-      }}
+    if: ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') && (needs.publish-crates-io.result == 'skipped' || needs.publish-crates-io.result == 'success') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: "read"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -556,3 +559,4 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+   
