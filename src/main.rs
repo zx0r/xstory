@@ -241,11 +241,17 @@ mod signals {
     #[allow(clippy::redundant_pub_crate)]
     pub(crate) fn install() {
         // SAFETY: Installing C-ABI handler for SIGINT (2).
-        unsafe { signal(2, handle_signal as *const () as usize); }
+        unsafe {
+            signal(2, handle_signal as *const () as usize);
+        }
         // SAFETY: Installing C-ABI handler for SIGTERM (15).
-        unsafe { signal(15, handle_signal as *const () as usize); }
+        unsafe {
+            signal(15, handle_signal as *const () as usize);
+        }
         // SAFETY: Setting SIGWINCH (28) to SIG_IGN (1) — we poll size ourselves.
-        unsafe { signal(28, 1); }
+        unsafe {
+            signal(28, 1);
+        }
     }
 }
 
@@ -664,6 +670,7 @@ fn execute(
 // ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
 

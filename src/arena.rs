@@ -392,7 +392,8 @@ impl Arena {
 
         // HashMap keyed by FNV-1a hash -> index of newest occurrence.
         // Flat zero-alloc per unique command. Collision resolved by exact byte comparison.
-        let mut seen: HashMap<u64, u32> = HashMap::with_capacity_and_hasher(n, IdentityBuild::default());
+        let mut seen: HashMap<u64, u32> =
+            HashMap::with_capacity_and_hasher(n, IdentityBuild::default());
         let mut global_buf: Vec<u32> = Vec::with_capacity(n);
         let mut local_buf: Vec<u32> = Vec::with_capacity(n / 4);
 
@@ -575,6 +576,11 @@ impl Config {
 // ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::undocumented_unsafe_blocks,
+    clippy::multiple_unsafe_ops_per_block,
+    clippy::disallowed_methods
+)]
 mod tests {
     use super::*;
     use std::io::Write;

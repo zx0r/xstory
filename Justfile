@@ -7,17 +7,17 @@ default: qa
 # Domain 1: Cargo Development Lifecycle
 # ==============================================================================
 
-# Format code according to rustfmt.toml
+# Format code in-place according to rustfmt.toml
 fmt:
     cargo fmt --all
 
-# Check formatting compliance without writing
+# Strict read-only check for CI & Git hooks (fails with exit code 1 on diff)
 fmt-check:
-    cargo fmt-check
+    cargo fmt --all -- --check
 
-# Run complete static analysis & lint suite (Pedantic/Nursery)
+# Run complete verification suite (style check + pedantic/nursery lints)
 qa: fmt-check
-    cargo qa
+    cargo clippy --all-targets --all-features -- -D warnings
 
 # Run all process-isolated tests
 test:

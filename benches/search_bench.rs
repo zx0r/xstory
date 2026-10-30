@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::io::Write;
