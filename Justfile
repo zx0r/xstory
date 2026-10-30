@@ -3,6 +3,7 @@
 
 set dotenv-load := false
 set export := false
+set shell := ["bash", "-euo", "pipefail", "-c"]
 
 bin := "xstory"
 target_dir := "target"
@@ -25,21 +26,21 @@ fmt-check:
 qa: fmt-check
     cargo clippy --all-targets --all-features -- -D warnings
 
-# Run all process-isolated tests via nextest
-test:
-    cargo nextest run --all-targets
+# Run all process-isolated tests via nextest (supports: just test <filter>)
+test *args:
+    cargo nextest run --all-targets {{ args }}
 
-# Run tests via standard cargo test harness (fallback/doc tests)
-test-all:
-    cargo test --all-targets --all-features
+# Run tests via standard cargo test harness (supports: just test-all <filter>)
+test-all *args:
+    cargo test --all-targets --all-features {{ args }}
 
 # Run end-to-end integration tests
 e2e:
     cargo test --test e2e
 
-# Run performance benchmarks via Criterion
-bench:
-    cargo bench
+# Run performance benchmarks via Criterion (supports: just bench <filter>)
+bench *args:
+    cargo bench {{ args }}
 
 # Run source-based LLVM coverage suite
 coverage:
@@ -54,12 +55,12 @@ watch:
 # Domain 2: Production Artifacts & Distribution
 # ==============================================================================
 
-# Build size-optimized micro-binary (< 380 KB)
+# Build size-optimized release binary (opt-level = "z", strip = true)
 release-small:
     cargo build --profile release-small
     @ls -lh {{ target_dir }}/release-small/{{ bin }}
 
-# Build full-throughput production release
+# Build full-throughput production release (opt-level = 3, LTO fat)
 release:
     cargo build --release
     @ls -lh {{ target_dir }}/release/{{ bin }}

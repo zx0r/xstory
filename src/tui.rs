@@ -266,7 +266,7 @@ impl<'a> Dashboard<'a> {
     pub fn preview_height(&self, arena: &Arena, area_height: u16, area_width: u16) -> u16 {
         match self.preview_mode {
             PreviewMode::Fixed => {
-                if area_height >= 18 {
+                if area_height >= 17 {
                     PREVIEW_PANEL_HEIGHT
                 } else {
                     PREVIEW_PANEL_HEIGHT.min(area_height.saturating_sub(8))
@@ -434,7 +434,7 @@ fn format_thousands(n: usize) -> String {
 
 pub const TOP_BREATHING_ROOM: u16 = 1;
 pub const ACTION_BAR_HEIGHT: u16 = 1;
-pub const PREVIEW_PANEL_HEIGHT: u16 = 10;
+pub const PREVIEW_PANEL_HEIGHT: u16 = 9;
 pub const QUERY_BAR_HEIGHT: u16 = 3;
 pub const HORIZONTAL_MARGIN: u16 = 1;
 pub const PANEL_PADDING_HORIZONTAL: u16 = 1;
@@ -1679,7 +1679,7 @@ mod tests {
             make_test_arena(&["1000\t50\t0\t/home\tline1\\nline2\\nline3\\nline4\\nline5"]);
         let mut dash = Dashboard::new(Theme::Dark, 80, 30, None, &arena);
 
-        // Default is Fixed: always returns PREVIEW_PANEL_HEIGHT (10)
+        // Default is Fixed: always returns PREVIEW_PANEL_HEIGHT (9)
         assert_eq!(dash.preview_mode, PreviewMode::Fixed);
         assert_eq!(dash.preview_height(&arena, 30, 80), PREVIEW_PANEL_HEIGHT);
 
