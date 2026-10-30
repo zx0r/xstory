@@ -7,6 +7,7 @@ excessive-nesting-threshold = 6
 array-size-threshold = 512
 warn-on-all-wildcard-imports = true
 allow-unwrap-in-tests = true
+allow-expect-in-tests = true
 
 doc-valid-idents = [
     "GitHub", "GitLab", "OpenTelemetry", "PostgreSQL", "MySQL", "SQLite",
@@ -16,8 +17,6 @@ doc-valid-idents = [
 ]
 
 disallowed-types = [
-    { path = "std::collections::HashMap", reason = "Use `ahash::AHashMap` for high throughput or `BTreeMap` for deterministic key ordering." },
-    { path = "std::collections::HashSet", reason = "Use `ahash::AHashSet` or `BTreeSet`." },
     { path = "std::sync::Mutex", reason = "Standard library Mutex lacks timeouts; use `parking_lot::Mutex` or `tokio::sync::Mutex`." },
     { path = "std::sync::RwLock", reason = "Standard library RwLock suffers from writer starvation; use `parking_lot::RwLock`." },
 ]

@@ -236,6 +236,13 @@ impl<'a> Dashboard<'a> {
         Some(arena.cmd_str(idx).to_owned())
     }
 
+    /// Zero-copy reference to the selected command string (used in hot paths).
+    #[must_use]
+    pub fn selected_cmd_str<'b>(&self, arena: &'b Arena) -> Option<&'b str> {
+        let &idx = self.result.indices.get(self.selected)?;
+        Some(arena.cmd_str(idx))
+    }
+
     /// Calculate current preview height taking preview mode and selection into account.
     #[must_use]
     pub fn preview_height(&self, arena: &Arena, area_height: u16, area_width: u16) -> u16 {
@@ -251,8 +258,7 @@ impl<'a> Dashboard<'a> {
                 let max_preview_h = (area_height / 2)
                     .clamp(6, 20)
                     .min(area_height.saturating_sub(8));
-                let cmd = self.selected_command(arena);
-                calc_preview_height(cmd.as_deref(), area_width, max_preview_h)
+                calc_preview_height(self.selected_cmd_str(arena), area_width, max_preview_h)
             }
         }
     }
@@ -596,6 +602,70 @@ fn extract_query_term(query: &str) -> &str {
 
 /// Zero-Destructive AST syntax highlighter with character-level query match overlay.
 /// Fast zero-alloc path on ASCII commands; reuses thread-local scratch vectors on UTF-8.
+const MATCH_STYLE: Style = Style::new()
+    .fg(Color::Indexed(215))
+    .add_modifier(Modifier::BOLD);
+
+/// Apply fuzzy subsequence match overlay for ASCII-only commands (byte-indexed).
+fn apply_ascii_match_overlay(query: &str, bytes: &[u8], styles: &mut [Style]) {
+    let term = extract_query_term(query);
+    if term.is_empty() || !term.is_ascii() {
+        return;
+    }
+    let t_bytes = term.as_bytes();
+    SCRATCH_MATCHES.with_borrow_mut(|matches| {
+        matches.clear();
+        let mut t_idx = 0;
+        for (b_idx, &b) in bytes.iter().enumerate() {
+            if t_idx < t_bytes.len() && b.eq_ignore_ascii_case(&t_bytes[t_idx]) {
+                matches.push(b_idx);
+                t_idx += 1;
+            }
+        }
+        if t_idx == t_bytes.len() {
+            for &idx in matches.iter() {
+                styles[idx] = MATCH_STYLE;
+            }
+        }
+    });
+}
+
+/// Apply fuzzy subsequence match overlay for UTF-8 commands (char-indexed).
+fn apply_utf8_match_overlay(
+    query: &str,
+    char_offsets: &[(usize, char)],
+    char_styles: &mut [Style],
+) {
+    let term = extract_query_term(query);
+    if term.is_empty() {
+        return;
+    }
+    SCRATCH_QCHARS.with_borrow_mut(|q_chars| {
+        q_chars.clear();
+        q_chars.extend(term.chars());
+        SCRATCH_MATCHES.with_borrow_mut(|matches| {
+            matches.clear();
+            let mut q_idx = 0;
+            for (t_idx, &(_, ch)) in char_offsets.iter().enumerate() {
+                if q_idx < q_chars.len()
+                    && (ch.eq_ignore_ascii_case(&q_chars[q_idx])
+                        || ch.to_lowercase().eq(q_chars[q_idx].to_lowercase()))
+                {
+                    matches.push(t_idx);
+                    q_idx += 1;
+                }
+            }
+            if q_idx == q_chars.len() {
+                for &idx in matches.iter() {
+                    if idx < char_styles.len() {
+                        char_styles[idx] = MATCH_STYLE;
+                    }
+                }
+            }
+        });
+    });
+}
+
 #[allow(clippy::too_many_lines)]
 fn build_highlighted_spans<'a>(
     cmd: &'a str,
@@ -655,28 +725,7 @@ fn build_highlighted_spans<'a>(
 
             // 2. Query match overlay (Zero-Destructive Subsequence Overlay)
             if let Some(q) = query {
-                let term = extract_query_term(q);
-                if !term.is_empty() && term.is_ascii() {
-                    let t_bytes = term.as_bytes();
-                    SCRATCH_MATCHES.with_borrow_mut(|matches| {
-                        matches.clear();
-                        let mut t_idx = 0;
-                        for (b_idx, &b) in bytes.iter().enumerate() {
-                            if t_idx < t_bytes.len() && b.eq_ignore_ascii_case(&t_bytes[t_idx]) {
-                                matches.push(b_idx);
-                                t_idx += 1;
-                            }
-                        }
-                        if t_idx == t_bytes.len() {
-                            let match_style = Style::default()
-                                .fg(Color::Indexed(215))
-                                .add_modifier(Modifier::BOLD);
-                            for &idx in matches.iter() {
-                                styles[idx] = match_style;
-                            }
-                        }
-                    });
-                }
+                apply_ascii_match_overlay(q, bytes, styles);
             }
 
             // 3. Span coalescing (group adjacent characters of identical style into zero-copy slices)
@@ -724,36 +773,7 @@ fn build_highlighted_spans<'a>(
 
             // 2. Query match overlay
             if let Some(q) = query {
-                let term = extract_query_term(q);
-                if !term.is_empty() {
-                    SCRATCH_QCHARS.with_borrow_mut(|q_chars| {
-                        q_chars.clear();
-                        q_chars.extend(term.chars());
-                        SCRATCH_MATCHES.with_borrow_mut(|matches| {
-                            matches.clear();
-                            let mut q_idx = 0;
-                            for (t_idx, &(_, ch)) in char_offsets.iter().enumerate() {
-                                if q_idx < q_chars.len()
-                                    && (ch.eq_ignore_ascii_case(&q_chars[q_idx])
-                                        || ch.to_lowercase().eq(q_chars[q_idx].to_lowercase()))
-                                {
-                                    matches.push(t_idx);
-                                    q_idx += 1;
-                                }
-                            }
-                            if q_idx == q_chars.len() {
-                                let match_style = Style::default()
-                                    .fg(Color::Indexed(215))
-                                    .add_modifier(Modifier::BOLD);
-                                for &idx in matches.iter() {
-                                    if idx < char_styles.len() {
-                                        char_styles[idx] = match_style;
-                                    }
-                                }
-                            }
-                        });
-                    });
-                }
+                apply_utf8_match_overlay(q, char_offsets, char_styles);
             }
 
             // 3. Span coalescing

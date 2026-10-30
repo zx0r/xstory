@@ -218,17 +218,20 @@ mod signals {
     }
     extern "C" fn handle_signal(sig: i32) {
         crate::tui::reset_terminal();
-        unsafe {
-            signal(sig, 0);
-            let _ = raise(sig);
-        }
+        // SAFETY: Restoring default signal disposition before re-raising.
+        // `signal(sig, SIG_DFL)` is async-signal-safe per POSIX.
+        unsafe { signal(sig, 0); }
+        // SAFETY: `raise` is async-signal-safe per POSIX.
+        unsafe { let _ = raise(sig); }
     }
+    #[allow(clippy::redundant_pub_crate)]
     pub(crate) fn install() {
-        unsafe {
-            signal(2, handle_signal as *const () as usize);
-            signal(15, handle_signal as *const () as usize);
-            signal(28, 1);
-        }
+        // SAFETY: Installing C-ABI handler for SIGINT (2).
+        unsafe { signal(2, handle_signal as *const () as usize); }
+        // SAFETY: Installing C-ABI handler for SIGTERM (15).
+        unsafe { signal(15, handle_signal as *const () as usize); }
+        // SAFETY: Setting SIGWINCH (28) to SIG_IGN (1) — we poll size ourselves.
+        unsafe { signal(28, 1); }
     }
 }
 

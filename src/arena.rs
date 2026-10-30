@@ -1,9 +1,37 @@
 #![allow(dead_code, unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap as StdMap, HashSet as StdSet};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
+
+// ── Identity Hasher (for pre-hashed u64 keys) ───────────────────
+
+/// Zero-cost hasher for keys that are already high-quality hashes (e.g. FNV-1a output).
+/// Stores the last `write_u64` verbatim — no mixing, no additional entropy.
+#[derive(Default, Debug)]
+pub struct IdentityHasher(u64);
+
+impl Hasher for IdentityHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write(&mut self, _bytes: &[u8]) {
+        unreachable!("IdentityHasher only supports write_u64");
+    }
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i;
+    }
+}
+
+/// Type alias for HashMap/HashSet with identity hashing (zero overhead on u64 keys).
+pub type IdentityBuild = BuildHasherDefault<IdentityHasher>;
+pub type HashMap<K, V> = StdMap<K, V, IdentityBuild>;
+pub type HashSet<K> = StdSet<K, IdentityBuild>;
 
 // ── Core Data Types ──────────────────────────────────────────────
 
@@ -62,8 +90,8 @@ pub enum Theme {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum PreviewMode {
     #[default]
-    Dynamic,
     Fixed,
+    Dynamic,
 }
 
 /// Application configuration.
@@ -166,6 +194,8 @@ fn make_byteview(s: &[u8], buf_id: u32, offset: u32) -> ByteView {
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn byteview_raw(s: &[u8], mmap_base: *const u8) -> ByteView {
     let offset = if s.len() > 12 {
+        // SAFETY: `s` is a subslice of the memory-mapped buffer starting at `mmap_base`.
+        // Both pointers belong to the same allocated region, and the offset is non-negative and fits in u32.
         unsafe { s.as_ptr().offset_from(mmap_base) as u32 }
     } else {
         0
@@ -362,7 +392,7 @@ impl Arena {
 
         // HashMap keyed by FNV-1a hash -> index of newest occurrence.
         // Flat zero-alloc per unique command. Collision resolved by exact byte comparison.
-        let mut seen: HashMap<u64, u32> = HashMap::with_capacity(n);
+        let mut seen: HashMap<u64, u32> = HashMap::with_capacity_and_hasher(n, IdentityBuild::default());
         let mut global_buf: Vec<u32> = Vec::with_capacity(n);
         let mut local_buf: Vec<u32> = Vec::with_capacity(n / 4);
 
@@ -408,11 +438,13 @@ impl Arena {
     #[must_use]
     #[inline]
     pub fn cmd_str(&self, idx: u32) -> &str {
+        // SAFETY: Commands stored in the arena are validated UTF-8 during ingestion/parsing.
         unsafe { std::str::from_utf8_unchecked(self.cmd_bytes(idx)) }
     }
     #[must_use]
     #[inline]
     pub fn cwd_str(&self, idx: u32) -> &str {
+        // SAFETY: Working directory paths stored in the arena are validated UTF-8 during ingestion/parsing.
         unsafe { std::str::from_utf8_unchecked(self.cwd_bytes(idx)) }
     }
 
@@ -421,15 +453,11 @@ impl Arena {
     fn resolve_bv(&self, bv: &ByteView) -> &[u8] {
         let len = bv.len as usize;
         if len <= 12 {
-            // SAFETY: bv is borrowed from self.commands/cwds Vec, lives as long as &self.
-            // prefix and data are contiguous in repr(C, align(16)) layout.
-            // Deriving from `bv` pointer ensures valid provenance over the entire struct (no subobject UB).
-            unsafe {
-                let ptr = std::ptr::from_ref(bv)
-                    .cast::<u8>()
-                    .add(core::mem::offset_of!(ByteView, prefix));
-                std::slice::from_raw_parts(ptr, len)
-            }
+            let ptr = std::ptr::addr_of!(bv.prefix).cast::<u8>();
+            // SAFETY: `bv` is borrowed from `self.commands`/`cwds` and lives as long as `&self`.
+            // In ByteView's `repr(C)` layout, `prefix` (4 bytes) and `data` (8 bytes) form a contiguous 12-byte buffer.
+            // Since `len <= 12`, `ptr` points to `len` consecutively valid, initialized bytes.
+            unsafe { std::slice::from_raw_parts(ptr, len) }
         } else {
             let buffer_id = u32::from_le_bytes([bv.data[0], bv.data[1], bv.data[2], bv.data[3]]);
             let offset = u32::from_le_bytes([bv.data[4], bv.data[5], bv.data[6], bv.data[7]]);
@@ -498,7 +526,7 @@ impl Config {
         Self {
             history_path,
             scroll_off: 4,
-            preview_mode: PreviewMode::Dynamic,
+            preview_mode: PreviewMode::Fixed,
             exclude_commands: vec!["exit".into(), "logout".into(), "clear".into()],
             secret_patterns: vec![
                 "AWS_SECRET".into(),

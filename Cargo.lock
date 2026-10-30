@@ -1337,6 +1337,7 @@ dependencies = [
  "tempfile",
  "tree-sitter",
  "tree-sitter-bash",
+ "unicode-width",
 ]
 
 [[package]]

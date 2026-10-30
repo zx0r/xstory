@@ -171,7 +171,7 @@ fn search_parallel<'a>(
     mode: QueryMode<'_>,
     query_mask: u64,
 ) -> SearchResult<'a> {
-    use rayon::prelude::*;
+    use rayon::prelude::{ParallelIterator, ParallelSlice};
 
     let local_results: Vec<(BinaryHeap<Scored>, u32)> = indices
         .par_chunks(CHUNK_SIZE)

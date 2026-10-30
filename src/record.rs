@@ -1,7 +1,7 @@
 //! Ingestion pipeline: filter → serialize → atomic append.
 //! Hot path: ≤1 allocation. Borrows all inputs.
 
-use std::collections::HashSet;
+use crate::arena::HashSet;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -433,7 +433,7 @@ fn has_four_tabs(s: &[u8]) -> bool {
 }
 
 fn load_existing_hashes(target_path: &Path, unesc: &mut Vec<u8>) -> HashSet<u64> {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::with_hasher(crate::arena::IdentityBuild::default());
     let mut raw_line: Vec<u8> = Vec::new();
     if let Ok(file) = std::fs::File::open(target_path) {
         let mut r = BufReader::with_capacity(64 * 1024, file);
@@ -646,7 +646,7 @@ mod tests {
         Config {
             history_path: path,
             scroll_off: 4,
-            preview_mode: crate::arena::PreviewMode::Dynamic,
+            preview_mode: crate::arena::PreviewMode::Fixed,
             exclude_commands: vec!["exit".into(), "logout".into(), "clear".into()],
             secret_patterns: vec![
                 "AWS_SECRET".into(),
