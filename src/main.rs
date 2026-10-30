@@ -215,14 +215,28 @@ mod signals {
     unsafe extern "C" {
         fn signal(s: i32, h: usize) -> usize;
         fn raise(s: i32) -> i32;
+        fn write(fd: i32, buf: *const u8, count: usize) -> isize;
     }
     extern "C" fn handle_signal(sig: i32) {
-        crate::tui::reset_terminal();
+        // Direct, async-signal-safe raw ANSI write to stderr (fd 2):
+        // 1. Disable mouse capture (\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1015l)
+        // 2. Show cursor (\x1b[?25h)
+        // 3. Leave alternate screen (\x1b[?1049l)
+        const RESET_SEQ: &[u8] =
+            b"\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1015l\x1b[?25h\x1b[?1049l";
+        // SAFETY: `write` is async-signal-safe per POSIX.1-2008; avoids stderr mutex deadlock.
+        unsafe {
+            let _ = write(2, RESET_SEQ.as_ptr(), RESET_SEQ.len());
+        }
         // SAFETY: Restoring default signal disposition before re-raising.
         // `signal(sig, SIG_DFL)` is async-signal-safe per POSIX.
-        unsafe { signal(sig, 0); }
+        unsafe {
+            signal(sig, 0);
+        }
         // SAFETY: `raise` is async-signal-safe per POSIX.
-        unsafe { let _ = raise(sig); }
+        unsafe {
+            let _ = raise(sig);
+        }
     }
     #[allow(clippy::redundant_pub_crate)]
     pub(crate) fn install() {
