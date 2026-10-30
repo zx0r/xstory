@@ -387,12 +387,17 @@ fn fit_path(path: &str, max_len: usize) -> String {
     if count <= max_len || max_len < 5 {
         return path.to_owned();
     }
-    let chars: Vec<char> = path.chars().collect();
     let keep_front = (max_len.saturating_sub(1)) / 3;
     let keep_back = max_len.saturating_sub(1 + keep_front);
-    let front: String = chars[..keep_front].iter().collect();
-    let back: String = chars[chars.len() - keep_back..].iter().collect();
-    format!("{front}…{back}")
+    let front_end = path
+        .char_indices()
+        .nth(keep_front)
+        .map_or(path.len(), |(i, _)| i);
+    let back_start = path
+        .char_indices()
+        .nth(count.saturating_sub(keep_back))
+        .map_or(0, |(i, _)| i);
+    format!("{}…{}", &path[..front_end], &path[back_start..])
 }
 
 fn format_thousands(n: usize) -> String {
@@ -432,7 +437,7 @@ pub fn count_wrapped_rows(text: &str, line_width: u16) -> usize {
     let width = line_width.max(1) as usize;
     let mut rows = 0;
     for line in text.split('\n') {
-        let w = line.chars().count();
+        let w = unicode_width::UnicodeWidthStr::width(line);
         rows += if w > width { w.div_ceil(width) } else { 1 };
     }
     rows.max(1)
@@ -1621,13 +1626,13 @@ mod tests {
             make_test_arena(&["1000\t50\t0\t/home\tline1\\nline2\\nline3\\nline4\\nline5"]);
         let mut dash = Dashboard::new(Theme::Dark, 80, 30, None, &arena);
 
-        // Default is Dynamic: command has 5 lines -> 5 + 2 = 7 height
-        assert_eq!(dash.preview_mode, PreviewMode::Dynamic);
-        assert_eq!(dash.preview_height(&arena, 30, 80), 7);
-
-        // Switch to Fixed: always returns PREVIEW_PANEL_HEIGHT (6)
-        dash.preview_mode = PreviewMode::Fixed;
+        // Default is Fixed: always returns PREVIEW_PANEL_HEIGHT (6)
+        assert_eq!(dash.preview_mode, PreviewMode::Fixed);
         assert_eq!(dash.preview_height(&arena, 30, 80), PREVIEW_PANEL_HEIGHT);
+
+        // Switch to Dynamic: command has 5 lines -> 5 + 2 = 7 height
+        dash.preview_mode = PreviewMode::Dynamic;
+        assert_eq!(dash.preview_height(&arena, 30, 80), 7);
     }
 
     #[test]
