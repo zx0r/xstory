@@ -647,6 +647,7 @@ mod tests {
             history_path: path,
             scroll_off: 4,
             preview_mode: crate::arena::PreviewMode::Fixed,
+            theme: None,
             exclude_commands: vec!["exit".into(), "logout".into(), "clear".into()],
             secret_patterns: vec![
                 "AWS_SECRET".into(),

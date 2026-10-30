@@ -266,10 +266,10 @@ impl<'a> Dashboard<'a> {
     pub fn preview_height(&self, arena: &Arena, area_height: u16, area_width: u16) -> u16 {
         match self.preview_mode {
             PreviewMode::Fixed => {
-                if area_height >= 17 {
+                if area_height >= 15 {
                     PREVIEW_PANEL_HEIGHT
                 } else {
-                    PREVIEW_PANEL_HEIGHT.min(area_height.saturating_sub(8))
+                    PREVIEW_PANEL_HEIGHT.min(area_height.saturating_sub(6))
                 }
             }
             PreviewMode::Dynamic => {
@@ -432,8 +432,6 @@ fn format_thousands(n: usize) -> String {
 
 // ── Unified Master Layout & Box Model ────────────────────────────
 
-pub const TOP_BREATHING_ROOM: u16 = 1;
-pub const ACTION_BAR_HEIGHT: u16 = 1;
 pub const PREVIEW_PANEL_HEIGHT: u16 = 9;
 pub const QUERY_BAR_HEIGHT: u16 = 3;
 pub const HORIZONTAL_MARGIN: u16 = 1;
@@ -442,8 +440,6 @@ pub const PANEL_PADDING_HORIZONTAL: u16 = 1;
 /// Master layout chunks derived from a single vertical split hierarchy.
 #[derive(Debug, Clone, Copy)]
 pub struct MasterLayout {
-    pub ceiling: Rect,
-    pub actions: Rect,
     pub history: Rect,
     pub preview: Rect,
     pub query: Rect,
@@ -492,8 +488,6 @@ pub fn compute_master_layout(area: Rect, preview_height: u16) -> MasterLayout {
         .direction(Direction::Vertical)
         .horizontal_margin(HORIZONTAL_MARGIN)
         .constraints([
-            Constraint::Length(TOP_BREATHING_ROOM),
-            Constraint::Length(ACTION_BAR_HEIGHT),
             Constraint::Min(3),
             Constraint::Length(eff_preview_height),
             Constraint::Length(QUERY_BAR_HEIGHT),
@@ -501,11 +495,9 @@ pub fn compute_master_layout(area: Rect, preview_height: u16) -> MasterLayout {
         .split(area);
 
     MasterLayout {
-        ceiling: chunks[0],
-        actions: chunks[1],
-        history: chunks[2],
-        preview: chunks[3],
-        query: chunks[4],
+        history: chunks[0],
+        preview: chunks[1],
+        query: chunks[2],
     }
 }
 
@@ -840,42 +832,8 @@ pub fn render_frame(
         return;
     }
 
-    // 1. Action Buttons
-    let items = [
-        ("[Esc]", " Exit"),
-        ("[^R]", " Scope"),
-        ("[↵]", " Run"),
-        ("[Tab]", " Edit"),
-    ];
-    let header_spans: Vec<Span<'_>> = items
-        .iter()
-        .enumerate()
-        .flat_map(|(i, (k, d))| {
-            let mut v = Vec::new();
-            if i > 0 {
-                v.push(Span::raw("   "));
-            }
-            v.push(Span::styled(*k, Style::default().fg(Color::Indexed(241))));
-            v.push(Span::styled(
-                *d,
-                Style::default()
-                    .fg(Color::Indexed(241))
-                    .add_modifier(Modifier::ITALIC),
-            ));
-            v
-        })
-        .collect();
-    f.render_widget(
-        Line::from(header_spans).alignment(Alignment::Center),
-        layout.actions,
-    );
-
-    // 2. History List
+    // 1. History List
     let history_focus = dash.focus == FocusedPanel::History;
-    let scope_char = match dash.scope {
-        Scope::Local => "L",
-        Scope::Global => "G",
-    };
     let total = dash.result.indices.len();
     let current = if total == 0 {
         0
@@ -887,7 +845,6 @@ pub fn render_frame(
     let h_border = panel_border_color(history_focus);
     let history_block = create_panel_block(history_focus)
         .padding(Padding::new(0, 1, 0, 0))
-        .title_top(Line::from(bracketed(scope_char, h_border)).alignment(Alignment::Left))
         .title_top(Line::from(bracketed(count_str, h_border)).alignment(Alignment::Right));
 
     let h_inner = history_block.inner(layout.history);
@@ -895,6 +852,10 @@ pub fn render_frame(
     let sel_bg = match dash.theme {
         Theme::Dark => Color::Indexed(237),
         Theme::Light => Color::Gray,
+        Theme::Catppuccin => Color::Rgb(49, 50, 68),
+        Theme::TokyoNight => Color::Rgb(47, 51, 77),
+        Theme::Gruvbox => Color::Rgb(60, 56, 54),
+        Theme::Nord => Color::Rgb(59, 66, 82),
     };
 
     let history_lines: Vec<Line<'_>> = (0..h_h)
@@ -1001,9 +962,16 @@ pub fn render_frame(
         layout.preview,
     );
 
-    // 4. Search Query Box
+    // 3. Search Query Box
     let query_focus = dash.focus == FocusedPanel::Query;
-    let query_block = create_panel_block(query_focus).padding(Padding::horizontal(1));
+    let scope_tag = match dash.scope {
+        Scope::Global => "G: ^R",
+        Scope::Local => "L: ^R",
+    };
+    let q_border = panel_border_color(query_focus);
+    let query_block = create_panel_block(query_focus)
+        .padding(Padding::horizontal(1))
+        .title_top(Line::from(bracketed(scope_tag, q_border)).alignment(Alignment::Right));
     let q_inner = query_block.inner(layout.query);
     let line = if dash.query.is_empty() {
         Line::from(vec![Span::styled(
@@ -1038,7 +1006,7 @@ pub fn run_tui(
     config: &Config,
     initial_query: Option<&str>,
 ) -> Result<Outcome, Error> {
-    let theme = detect_theme();
+    let theme = config.theme.unwrap_or_else(detect_theme);
     let (w, h) = crossterm::terminal::size()?;
     let mut dash = Dashboard::new(theme, w, h, initial_query, arena);
     dash.preview_mode = config.preview_mode;
@@ -1446,14 +1414,12 @@ mod tests {
         let area_normal = Rect::new(0, 0, 100, 30);
         let layout_normal = compute_master_layout(area_normal, PREVIEW_PANEL_HEIGHT);
 
-        assert_eq!(layout_normal.ceiling.height, TOP_BREATHING_ROOM);
-        assert_eq!(layout_normal.actions.height, ACTION_BAR_HEIGHT);
         assert_eq!(layout_normal.preview.height, PREVIEW_PANEL_HEIGHT);
         assert_eq!(layout_normal.query.height, QUERY_BAR_HEIGHT);
         // History panel flexes to absorb the rest
         assert_eq!(
             layout_normal.history.height,
-            30 - (TOP_BREATHING_ROOM + ACTION_BAR_HEIGHT + PREVIEW_PANEL_HEIGHT + QUERY_BAR_HEIGHT)
+            30 - (PREVIEW_PANEL_HEIGHT + QUERY_BAR_HEIGHT)
         );
 
         // Terminal resize to larger window preserves static preview and query heights

@@ -295,6 +295,7 @@ struct Cli {
     history_path: Option<PathBuf>,
     scope: Option<arena::Scope>,
     preview: Option<arena::PreviewMode>,
+    theme: Option<arena::Theme>,
     action: Action,
 }
 
@@ -370,6 +371,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
     let mut history_path = None;
     let mut scope = None;
     let mut preview = None;
+    let mut theme = None;
     let mut rest = Vec::new();
     let mut it = args.iter();
 
@@ -379,6 +381,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
                 history_path,
                 scope,
                 preview,
+                theme,
                 action: Action::Help,
             });
         } else if arg == "-v" || arg == "-V" || arg == "--version" {
@@ -386,6 +389,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
                 history_path,
                 scope,
                 preview,
+                theme,
                 action: Action::Version,
             });
         } else if let Some(val) = arg.strip_prefix("--history=") {
@@ -428,6 +432,24 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
                 .next()
                 .ok_or(Error::InvalidArgs("missing argument for --preview"))?;
             preview = Some(parse_preview_mode(val)?);
+        } else if let Some(val) = arg
+            .strip_prefix("--theme=")
+            .or_else(|| arg.strip_prefix("--preset="))
+        {
+            theme = Some(val.parse::<arena::Theme>().map_err(|()| {
+                Error::InvalidArgs(
+                    "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord)",
+                )
+            })?);
+        } else if arg == "-t" || arg == "--theme" || arg == "--preset" {
+            let val = it
+                .next()
+                .ok_or(Error::InvalidArgs("missing argument for --theme"))?;
+            theme = Some(val.parse::<arena::Theme>().map_err(|()| {
+                Error::InvalidArgs(
+                    "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord)",
+                )
+            })?);
         } else {
             rest.push(arg.clone());
             for rem in it {
@@ -442,6 +464,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
             history_path,
             scope,
             preview,
+            theme,
             action: Action::Search {
                 initial_query: None,
             },
@@ -508,6 +531,24 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
                         .next()
                         .ok_or(Error::InvalidArgs("missing argument for --preview"))?;
                     preview = Some(parse_preview_mode(val)?);
+                } else if let Some(val) = a
+                    .strip_prefix("--theme=")
+                    .or_else(|| a.strip_prefix("--preset="))
+                {
+                    theme = Some(val.parse::<arena::Theme>().map_err(|()| {
+                        Error::InvalidArgs(
+                            "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord)",
+                        )
+                    })?);
+                } else if a == "-t" || a == "--theme" || a == "--preset" {
+                    let val = iter
+                        .next()
+                        .ok_or(Error::InvalidArgs("missing argument for --theme"))?;
+                    theme = Some(val.parse::<arena::Theme>().map_err(|()| {
+                        Error::InvalidArgs(
+                            "invalid theme (expected dark, light, catppuccin, tokyo-night, gruvbox, nord)",
+                        )
+                    })?);
                 } else if !a.starts_with('-') && q.is_none() {
                     q = Some(a.clone());
                 }
@@ -528,6 +569,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
         history_path,
         scope,
         preview,
+        theme,
         action,
     })
 }
@@ -582,7 +624,7 @@ fn run() -> Result<(), Error> {
             print!("{hook}");
             Ok(())
         }
-        action => execute(action, cli.history_path, cli.scope, cli.preview),
+        action => execute(action, cli.history_path, cli.scope, cli.preview, cli.theme),
     }
 }
 
@@ -591,6 +633,7 @@ fn execute(
     history_path_override: Option<PathBuf>,
     scope: Option<arena::Scope>,
     preview_override: Option<arena::PreviewMode>,
+    theme_override: Option<arena::Theme>,
 ) -> Result<(), Error> {
     let mut config = arena::Config::load();
     if let Some(path) = history_path_override {
@@ -598,6 +641,9 @@ fn execute(
     }
     if let Some(prev) = preview_override {
         config.preview_mode = prev;
+    }
+    if let Some(th) = theme_override {
+        config.theme = Some(th);
     }
 
     match action {
@@ -702,6 +748,22 @@ mod tests {
             },
             _ => panic!("expected parse success"),
         }
+    }
+
+    #[test]
+    fn parse_theme_flags() {
+        assert!(matches!(
+            parse_args(&["--theme=catppuccin".into()]),
+            Ok(cli) if cli.theme == Some(arena::Theme::Catppuccin)
+        ));
+        assert!(matches!(
+            parse_args(&["--preset=tokyo-night".into()]),
+            Ok(cli) if cli.theme == Some(arena::Theme::TokyoNight)
+        ));
+        assert!(matches!(
+            parse_args(&["-t".into(), "gruvbox".into()]),
+            Ok(cli) if cli.theme == Some(arena::Theme::Gruvbox)
+        ));
     }
 
     #[test]

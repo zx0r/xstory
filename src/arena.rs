@@ -80,11 +80,32 @@ pub enum Scope {
     Local,
 }
 
-/// Terminal color scheme.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// Terminal color scheme and syntax highlighting preset.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Theme {
+    #[default]
     Dark,
     Light,
+    Catppuccin,
+    TokyoNight,
+    Gruvbox,
+    Nord,
+}
+
+impl std::str::FromStr for Theme {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "dark" => Ok(Self::Dark),
+            "light" => Ok(Self::Light),
+            "catppuccin" | "mocha" | "macchiato" => Ok(Self::Catppuccin),
+            "tokyo-night" | "tokyonight" | "tokyo_night" => Ok(Self::TokyoNight),
+            "gruvbox" => Ok(Self::Gruvbox),
+            "nord" => Ok(Self::Nord),
+            _ => Err(()),
+        }
+    }
 }
 
 /// Preview sizing mode.
@@ -101,6 +122,7 @@ pub struct Config {
     pub history_path: PathBuf,
     pub scroll_off: u16,
     pub preview_mode: PreviewMode,
+    pub theme: Option<Theme>,
     pub exclude_commands: Vec<String>,
     pub secret_patterns: Vec<String>,
 }
@@ -524,6 +546,11 @@ impl Config {
                 cfg.preview_mode = PreviewMode::Dynamic;
             }
         }
+        if let Ok(val) = std::env::var("XSTORY_THEME").or_else(|_| std::env::var("XSTORY_PRESET"))
+            && let Ok(t) = val.parse::<Theme>()
+        {
+            cfg.theme = Some(t);
+        }
         cfg
     }
 
@@ -536,6 +563,7 @@ impl Config {
             history_path,
             scroll_off: 4,
             preview_mode: PreviewMode::Fixed,
+            theme: None,
             exclude_commands: vec!["exit".into(), "logout".into(), "clear".into()],
             secret_patterns: vec![
                 "AWS_SECRET".into(),
@@ -569,6 +597,11 @@ impl Config {
                 }
                 ("preview" | "preview_mode", "fixed") => cfg.preview_mode = PreviewMode::Fixed,
                 ("preview" | "preview_mode", "dynamic") => cfg.preview_mode = PreviewMode::Dynamic,
+                ("theme" | "preset", v) => {
+                    if let Ok(t) = v.parse::<Theme>() {
+                        cfg.theme = Some(t);
+                    }
+                }
                 ("exclude_commands", v) => {
                     cfg.exclude_commands = v.split(',').map(|s| s.trim().to_owned()).collect();
                 }
