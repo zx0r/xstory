@@ -173,7 +173,8 @@ pub fn style_for(kind: TokenKind, theme: Theme) -> Style {
 
 // ── Tests ────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

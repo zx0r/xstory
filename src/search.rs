@@ -14,6 +14,7 @@ use crate::arena::{Arena, Scope, Scored, char_mask};
 pub const TOP_K: usize = 1000;
 
 /// Chunk size for parallel search. Below this, single-thread.
+#[cfg(not(miri))]
 const PAR_THRESHOLD: usize = 500;
 
 /// Rayon chunk size for parallel iteration.
@@ -229,11 +230,14 @@ pub fn search<'a>(arena: &'a Arena, query: &str, scope: Scope) -> SearchResult<'
         QueryMode::Empty => unreachable!(),
     };
     let query_mask = char_mask(query_bytes);
+    #[cfg(not(miri))]
     if indices.len() < PAR_THRESHOLD {
         search_sequential(arena, indices, mode, query_mask)
     } else {
         search_parallel(arena, indices, mode, query_mask)
     }
+    #[cfg(miri)]
+    search_sequential(arena, indices, mode, query_mask)
 }
 
 // ── Tests ────────────────────────────────────────────────────────
@@ -406,6 +410,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn parallel_vs_sequential_same_results() {
         // Build enough entries to trigger parallel path
         let mut lines = Vec::new();

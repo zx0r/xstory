@@ -1207,7 +1207,8 @@ pub fn run_tui(
 
 // ── Tests ────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

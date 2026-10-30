@@ -4,6 +4,7 @@ use std::collections::{HashMap as StdMap, HashSet as StdSet};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::path::{Path, PathBuf};
 
+#[cfg(not(miri))]
 use memmap2::Mmap;
 
 // ── Identity Hasher (for pre-hashed u64 keys) ───────────────────
@@ -109,7 +110,10 @@ pub struct Config {
 /// Columnar in-memory arena. Owns the mmap and all decoded columns.
 #[derive(Debug)]
 pub struct Arena {
+    #[cfg(not(miri))]
     mmap: Option<Mmap>,
+    #[cfg(miri)]
+    mmap: Option<Vec<u8>>,
     unescape_buf: Vec<u8>,
     pub timestamps: Vec<i64>,
     pub durations: Vec<u32>,
@@ -287,8 +291,11 @@ impl Arena {
             return Ok(arena);
         }
 
+        #[cfg(not(miri))]
         // SAFETY: file opened read-only, not modified during our lifetime.
         let mmap = unsafe { Mmap::map(&file)? };
+        #[cfg(miri)]
+        let mmap = std::fs::read(path)?;
         let mmap_base = mmap.as_ptr();
         let data = &mmap[..];
 
@@ -454,10 +461,11 @@ impl Arena {
     fn resolve_bv(&self, bv: &ByteView) -> &[u8] {
         let len = bv.len as usize;
         if len <= 12 {
-            let ptr = std::ptr::addr_of!(bv.prefix).cast::<u8>();
-            // SAFETY: `bv` is borrowed from `self.commands`/`cwds` and lives as long as `&self`.
-            // In ByteView's `repr(C)` layout, `prefix` (4 bytes) and `data` (8 bytes) form a contiguous 12-byte buffer.
-            // Since `len <= 12`, `ptr` points to `len` consecutively valid, initialized bytes.
+            let base = std::ptr::addr_of!(*bv).cast::<u8>();
+            // SAFETY: In ByteView's `repr(C)` layout, offset 4 is the start of `prefix` (4 bytes),
+            // followed consecutively by `data` (8 bytes) without padding. Adding 4 remains within ByteView (16 bytes).
+            let ptr = unsafe { base.add(4) };
+            // SAFETY: `ptr` points to `len` consecutively valid, initialized bytes within the 16-byte ByteView allocation.
             unsafe { std::slice::from_raw_parts(ptr, len) }
         } else {
             let buffer_id = u32::from_le_bytes([bv.data[0], bv.data[1], bv.data[2], bv.data[3]]);
