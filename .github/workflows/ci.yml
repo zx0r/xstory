@@ -287,7 +287,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Memory Safety Verification:
-      # - -Zmiri-disable-isolation: Required because layout unit tests verify atomic tempfile creation
+      # - -Zmiri-disable-isolation: Required because arena/record unit tests verify atomic tempfile creation
       # - -Zmiri-tree-borrows: Enforces next-generation pointer aliasing rules
       # - -Zmiri-strict-provenance: Detects integer-to-pointer casting violations
       - name: "Run Miri Memory Safety Verification"

@@ -18,6 +18,38 @@ post_bump_hooks = [
     "git push origin {{version_tag}}",
 ]
 
+# Enforced commit scopes for xstory architecture
+scopes = [
+    "arena",
+    "audit",
+    "ci",
+    "cli",
+    "config",
+    "core",
+    "deps",
+    "dist",
+    "ecosystem",
+    "error",
+    "history",
+    "hooks",
+    "infra",
+    "main",
+    "palette",
+    "qa",
+    "readme",
+    "record",
+    "release",
+    "renovate",
+    "search",
+    "security",
+    "signals",
+    "spec",
+    "store",
+    "syntax",
+    "theme",
+    "tui",
+]
+
 [commit_types]
 feat     = { changelog_title = "Features", bump_minor = true }
 fix      = { changelog_title = "Bug Fixes", bump_patch = true }

@@ -46,7 +46,7 @@ commit-msg:
         :: [Lefthook] Invalid Conventional Commit message.
         Format  : <type>(<scope>): <subject>
         Types   : feat, fix, perf, refactor, docs, style, test, build, ci, chore, revert
-        Scopes  : core, cli, config, history, store, tui, security, ci, deps, readme, release, renovate
+        Scopes  : arena, record, search, syntax, tui, hooks, signals, theme, core, cli, config, qa, audit, security, ci, deps, readme, release, renovate
 
 # ------------------------------------------------------------------------------
 # Stage 3: Full Compiler, Security & Test Gates (Pre-Push: 3-5s)

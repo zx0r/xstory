@@ -186,7 +186,7 @@ end
 
 function __xstory_search
     set -l selected (xstory -- (commandline -b) | string collect)
-    set -l ret $status
+    set -l ret $pipestatus[1]
     if test $ret -eq 0 -a -n "$selected"
         commandline -r -- "$selected"
         commandline -f repaint
