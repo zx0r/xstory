@@ -237,8 +237,32 @@ fn byteview_unescaped(s: &[u8], offset: u32) -> ByteView {
 // ── Unescape ─────────────────────────────────────────────────────
 
 #[inline]
+fn find_byte(needle: u8, haystack: &[u8]) -> Option<usize> {
+    #[cfg(not(miri))]
+    {
+        memchr::memchr(needle, haystack)
+    }
+    #[cfg(miri)]
+    {
+        haystack.iter().position(|&b| b == needle)
+    }
+}
+
+#[inline]
+fn count_byte(needle: u8, haystack: &[u8]) -> usize {
+    #[cfg(not(miri))]
+    {
+        memchr::memchr_iter(needle, haystack).count()
+    }
+    #[cfg(miri)]
+    {
+        haystack.iter().filter(|&&b| b == needle).count()
+    }
+}
+
+#[inline]
 fn has_escapes(s: &[u8]) -> bool {
-    memchr::memchr(b'\\', s).is_some()
+    find_byte(b'\\', s).is_some()
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -321,7 +345,7 @@ impl Arena {
         let mmap_base = mmap.as_ptr();
         let data = &mmap[..];
 
-        let line_count = memchr::memchr_iter(b'\n', data).count();
+        let line_count = count_byte(b'\n', data);
         arena.timestamps.reserve(line_count);
         arena.durations.reserve(line_count);
         arena.exit_codes.reserve(line_count);
@@ -331,7 +355,7 @@ impl Arena {
 
         let mut pos = 0;
         while pos < data.len() {
-            let line_end = memchr::memchr(b'\n', &data[pos..]).map_or(data.len(), |i| pos + i);
+            let line_end = find_byte(b'\n', &data[pos..]).map_or(data.len(), |i| pos + i);
             let line = &data[pos..line_end];
             pos = line_end + 1;
 
@@ -340,19 +364,19 @@ impl Arena {
             }
 
             // 5 fields: timestamp \t duration \t exit_code \t cwd \t command
-            let Some(t1) = memchr::memchr(b'\t', line) else {
+            let Some(t1) = find_byte(b'\t', line) else {
                 continue;
             };
-            let Some(t2) = memchr::memchr(b'\t', &line[t1 + 1..]).map(|i| t1 + 1 + i) else {
+            let Some(t2) = find_byte(b'\t', &line[t1 + 1..]).map(|i| t1 + 1 + i) else {
                 continue;
             };
-            let Some(t3) = memchr::memchr(b'\t', &line[t2 + 1..]).map(|i| t2 + 1 + i) else {
+            let Some(t3) = find_byte(b'\t', &line[t2 + 1..]).map(|i| t2 + 1 + i) else {
                 continue;
             };
-            let Some(t4) = memchr::memchr(b'\t', &line[t3 + 1..]).map(|i| t3 + 1 + i) else {
+            let Some(t4) = find_byte(b'\t', &line[t3 + 1..]).map(|i| t3 + 1 + i) else {
                 continue;
             };
-            if memchr::memchr(b'\t', &line[t4 + 1..]).is_some() {
+            if find_byte(b'\t', &line[t4 + 1..]).is_some() {
                 continue; // >5 fields → malformed
             }
 

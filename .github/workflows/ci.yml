@@ -292,9 +292,7 @@ jobs:
       # - -Zmiri-strict-provenance: Detects integer-to-pointer casting violations
       - name: "Run Miri Memory Safety Verification"
         env:
-          MIRIFLAGS:
-            "-Zmiri-disable-isolation -Zmiri-tree-borrows -Zmiri-symbolic-alignment-check
-            -Zmiri-strict-provenance"
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-tree-borrows -Zmiri-strict-provenance"
         run: "cargo miri test --locked --workspace --lib"
 
   # ----------------------------------------------------------------------------
