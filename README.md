@@ -59,7 +59,7 @@ xstory init fish | source
 
 The xstory Unix-style approach:
 
-- **Core**: Ultra-fast, deterministic local engine (utilizing zero-copy `mmap`, `O_APPEND` for TSV files, and sub-1ms lookups). 
+- **Core**: Ultra-fast, deterministic local engine (utilizing zero-copy `mmap`, `O_APPEND` for TSV files). 
 - **Synchronization**: Achieved by composing standard Unix utilities to operate on the `history.tsv` storage format. 
 
 Since the xstory data store is simply a flat text file (`history.tsv`), there is no need for custom synchronization code within the Rust binary itself! Git already handles diffs, merges, SSH authentication, signed commits, and remote repository interactions better than any built-in library could.
