@@ -14,31 +14,18 @@
 </p>
 
 <p align="center">
-  <img src="./assets/images/xstory-banner.png" style="border-radius: 8px" width="" height="" alt="xstory banner" />
+  <img src="assets/images/xstory-banner.jpg" alt="xstory banner" style="border-radius: 8px; max-width: 100%;" />
 </p>
 
-<h2 align="center">
-  Unix shell history engine & interactive picker for sub-millisecond search
+<h3 align="center">
+  Unix shell history engine & interactive picker
 </h2>
 
 <p align="center">
-  <a href="#">
-    <img 
-      src="./assets/gif/xstory-preview.gif" style="border-radius: 8px" width="" 
-      alt="xstory demo — sub-millisecond shell history fuzzy search and preview"
-    />
+  <a href="assets/video/xstory-demo.mp4">
+    <img src="assets/gif/xstory-preview.gif" alt="xstory demo — sub-millisecond shell history fuzzy search and preview" style="border-radius: 8px; max-width: 100%;" />
   </a>
 </p>
-
----
-
-### Architecture & Storage Engine
-
-- **Columnar Memory-Mapped Arena**: Reads `history.tsv` via `mmap(2)` into a columnar memory layout without heap-allocating command strings during loading.
-- **16-Byte `ByteView` Descriptors**: Inline storage for commands $\le$ 12 bytes (`prefix[4] ++ data[8]`), out-of-line buffer offsets for longer entries.
-- **64-Bit Bitmask Pruning**: O(1) early rejection of non-matching entries prior to scoring.
-- **Reverse-Chronological Deduplication**: Flat FNV-1a hash map over unique commands; newer invocations unconditionally win.
-- **In-Thread Syntax Highlighting**: Tree-sitter Bash parser running in-process with LRU caching — zero external subprocess spawns per frame.
 
 ---
 
@@ -52,16 +39,13 @@ cargo install xstory
 brew install zx0r/tap/xstory
 
 # Build from source (LTO fat, stripped)
-git clone https://github.com/zx0r/xstory.git
-cd xstory
-just release
+gh repo clone zx0r/xstory
+cd xstory && just release
 ```
 
 ---
 
 ### Shell Integration
-
-Add the initialization hook to your shell configuration:
 
 ```bash
 # Zsh (~/.zshrc)
@@ -73,12 +57,19 @@ eval "$(xstory init bash)"
 # Fish (~/.config/fish/config.fish)
 xstory init fish | source
 ```
+---
 
-The hook captures execution metadata (`exit_code`, `duration_ms`, `cwd`, `timestamp`) and binds `Ctrl+R` and `Up` to the search widget.
+### Architecture
+
+- **Columnar Memory-Mapped Arena**: Reads `history.tsv` via `mmap(2)` into a columnar memory layout without heap-allocating command strings during loading.
+- **16-Byte `ByteView` Descriptors**: Inline storage for commands $\le$ 12 bytes (`prefix[4] ++ data[8]`), out-of-line buffer offsets for longer entries.
+- **64-Bit Bitmask Pruning**: O(1) early rejection of non-matching entries prior to scoring.
+- **Reverse-Chronological Deduplication**: Flat FNV-1a hash map over unique commands; newer invocations unconditionally win.
+- **In-Thread Syntax Highlighting**: Tree-sitter Bash parser running in-process with LRU caching — zero external subprocess spawns per frame.
 
 ---
 
-### Keybinding & Navigation Contract
+### Keybinding
 
 Layout uses a 3-panel stacked hierarchy: `History` $\rightarrow$ `Preview` $\rightarrow$ `Query`.
 
@@ -86,8 +77,8 @@ Layout uses a 3-panel stacked hierarchy: `History` $\rightarrow$ `Preview` $\rig
 |---|---|---|
 | `Enter` | Any | Accept command and execute immediately (exit code `0`) |
 | `Tab` | Any | Insert command into shell buffer for editing without executing (exit code `2`) |
-| `Ctrl+R` | Any | Toggle search scope: **`[G: ^R]`** (Global) $\leftrightarrow$ **`[L: ^R]`** (CWD only) |
-| `Ctrl+T` | Any | Cycle theme: **`[<theme>: ^T]`** (`dark` → `light` → `catppuccin` → `tokyo-night` → `gruvbox` → `nord` → `cake`) |
+| `Ctrl+R` | Any | Toggle search scope: **`[G]`** (Global) $\leftrightarrow$ **`[L]`** (CWD only) |
+| `Ctrl+T` | Any | Cycle syntax theme: `dark` → `light` → `catppuccin` → `tokyo-night` → `gruvbox` → `nord` → `cake` |
 | `Shift+Up` | Any | Directional focus step upward (`Query` $\rightarrow$ `Preview` $\rightarrow$ `History`) |
 | `Shift+Down` | Any | Directional focus step downward (`History` $\rightarrow$ `Preview` $\rightarrow$ `Query`) |
 | `Up` / `Down` | `History` focused | Navigate selection (bottom-up reverse-chronological) |
@@ -98,7 +89,7 @@ Layout uses a 3-panel stacked hierarchy: `History` $\rightarrow$ `Preview` $\rig
 
 ---
 
-### Search Syntax
+### Query
 
 | Pattern | Mode | Semantics |
 |---|---|---|
@@ -116,8 +107,8 @@ Path: `~/.config/xstory/config` (or `$XDG_CONFIG_HOME/xstory/config`).
 ```toml
 history_path = "~/.local/share/xstory/history.tsv"
 scroll_off = 4
-preview_mode = "fixed" # "fixed" (default, 9 rows) | "dynamic"
-theme = "dark"         # "dark" (default) | "light" | "catppuccin" | "tokyo-night" | "gruvbox" | "nord" | "cake"
+preview_mode = "fixed" # "fixed" | "dynamic"
+theme = "dark"         # "dark" | "light" | "catppuccin" | "tokyo-night" | "gruvbox" | "nord" | "cake"
 ```
 
 CLI flags override config values:
@@ -147,6 +138,28 @@ xstory history import ~/.zsh_history
 
 # Export deduplicated history database to stdout
 xstory history export > history.tsv
+```
+
+---
+
+#### [ x s t o r y ]
+
+<p align="center">
+  <img src="./assets/gif/xstory-crab.gif" width="360" height="" alt="xstory" />
+</p>
+
+```shell
+xstory [QUERY]
+
+[✓] zero-copy columnar arena
+[✓] sub-millisecond bitmask pruning
+[✓] in-process tree-sitter highlighting
+[✓] atomic append execution logging
+
+you run commands → we index them instantly
+you switch directories → we scope history without delay
+
+that's it... happy shell history...
 ```
 
 ---

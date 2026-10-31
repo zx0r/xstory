@@ -54,3 +54,16 @@ coverage/
 # Local configuration
 # =========================
 config.toml
+
+# =========================
+# Raw media captures
+# =========================
+*.mov
+
+# =========================
+# Specifications & Task drafts
+# =========================
+specs/
+.specs/
+
+

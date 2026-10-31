@@ -963,17 +963,13 @@ pub fn render_frame(
     // 3. Search Query Box
     let query_focus = dash.focus == FocusedPanel::Query;
     let scope_tag = match dash.scope {
-        Scope::Global => "G: ^R",
-        Scope::Local => "L: ^R",
+        Scope::Global => "G",
+        Scope::Local => "L",
     };
-    let theme_tag = format!("{}: ^T", dash.theme.name());
     let q_border = panel_border_color(query_focus);
-    let mut title_spans = bracketed(scope_tag, q_border);
-    title_spans.push(Span::raw(" "));
-    title_spans.extend(bracketed(theme_tag, q_border));
     let query_block = create_panel_block(query_focus)
         .padding(Padding::horizontal(1))
-        .title_top(Line::from(title_spans).alignment(Alignment::Right));
+        .title_top(Line::from(bracketed(scope_tag, q_border)).alignment(Alignment::Right));
     let q_inner = query_block.inner(layout.query);
     let line = if dash.query.is_empty() {
         Line::from(vec![Span::styled(

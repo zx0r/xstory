@@ -2,7 +2,7 @@
 //! Hot path: ≤1 allocation. Borrows all inputs.
 
 use crate::arena::HashSet;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -306,11 +306,24 @@ pub fn export_history_from_path(
     }
 
     if scope == crate::arena::Scope::Global {
+        let mut buf = vec![0u8; 64 * 1024];
         if let Some(ref mut w) = file_writer {
-            std::io::copy(&mut reader, w)?;
+            loop {
+                let n = reader.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                w.write_all(&buf[..n])?;
+            }
             w.flush()?;
         } else if let Some(ref mut w) = stdout_writer {
-            std::io::copy(&mut reader, w)?;
+            loop {
+                let n = reader.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                w.write_all(&buf[..n])?;
+            }
             w.flush()?;
         }
         return Ok(());
