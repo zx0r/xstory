@@ -19,10 +19,10 @@
 
 <h3 align="center">
   Unix shell history engine & interactive picker
-</h2>
+</h3>
 
 <p align="center">
-  <a href="assets/video/xstory-demo.mp4">
+  <a href="https://github.com/user-attachments/assets/808dbcbd-fad3-43f3-a6c9-788406c55331">
     <img src="assets/gif/xstory-preview.gif" alt="xstory demo — sub-millisecond shell history fuzzy search and preview" style="border-radius: 8px; max-width: 100%;" />
   </a>
 </p>
