@@ -259,6 +259,14 @@ fn run_scale_suite(title: &str, count: usize, path_str: &str, ram_mb: f64, ram_d
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--list") {
+        if !args.iter().any(|arg| arg == "--ignored") {
+            println!("bench_scale: benchmark");
+        }
+        return;
+    }
+
     println!("\n################################################################################");
     println!("           xstory — COMPREHENSIVE ARCHITECTURAL SCALE BENCHMARK");
     println!("                (N = 100 STATISTICAL SAMPLE RUNS PER QUERY)");
