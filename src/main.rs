@@ -605,7 +605,7 @@ fn run() -> Result<(), Error> {
             Ok(())
         }
         Action::Version => {
-            println!("xstory 0.1.0");
+            println!("xstory {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Action::Init { shell } => {

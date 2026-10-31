@@ -190,7 +190,10 @@ fn e2e_cli_dispatch_and_exit_codes() {
     cmd.arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("xstory 0.1.0"));
+        .stdout(predicate::str::contains(format!(
+            "xstory {}",
+            env!("CARGO_PKG_VERSION")
+        )));
 
     // Help
     let mut cmd = Command::cargo_bin("xstory").expect("binary");
