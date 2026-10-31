@@ -50,6 +50,10 @@ predicates = "3.1.4"
 name = "search_bench"
 harness = false
 
+[[bench]]
+name = "bench_scale"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = "fat"

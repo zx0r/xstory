@@ -1,15 +1,21 @@
+#![allow(
+    clippy::expect_used,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss
+)]
+
 use std::fs::File;
 use std::hint::black_box;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use xstory::matcher::MatchEngine;
-use xstory::store::read_arena;
+use xstory::arena::{Arena, Scope};
+use xstory::search::search;
 
 const SAMPLES: usize = 100;
 const WARMUP: usize = 10;
-
 const PATH_500K: &str = "/tmp/xstory_500k.tsv";
 
 fn ensure_dataset(path: &Path, count: usize) {
@@ -91,7 +97,7 @@ fn ensure_dataset(path: &Path, count: usize) {
     for i in 0..count {
         let (cmd, cwd, code) = templates[i % templates.len()];
         let ts = base_ts + (i as i64 * 1000);
-        let duration = (i % 400) as u64;
+        let duration = (i % 400) as u32;
         writeln!(writer, "{ts}\t{duration}\t{code}\t{cwd}\t{cmd} --iter={i}")
             .expect("Failed to write TSV record");
     }
@@ -148,25 +154,19 @@ fn compute_stats(mut samples: Vec<Duration>) -> Stats {
     }
 }
 
-fn benchmark_query(
-    engine: &MatchEngine,
-    arena: &xstory::arena::HistoryArena,
-    indices: &[usize],
-    query: &str,
-    limit: Option<usize>,
-) -> (Stats, usize) {
+fn benchmark_query(arena: &Arena, query: &str) -> (Stats, usize) {
     // Warm-up runs to stabilize CPU branch predictors and threadpools
     for _ in 0..WARMUP {
-        let _ = black_box(engine.search_arena(arena, indices, query, limit));
+        let _ = black_box(search(arena, query, Scope::Global));
     }
 
     let mut samples = Vec::with_capacity(SAMPLES);
     let mut match_count = 0;
     for _ in 0..SAMPLES {
         let t0 = Instant::now();
-        let res = black_box(engine.search_arena(arena, indices, query, limit));
+        let res = black_box(search(arena, query, Scope::Global));
         let elapsed = t0.elapsed();
-        match_count = res.len();
+        match_count = res.indices.len();
         samples.push(elapsed);
     }
 
@@ -195,7 +195,7 @@ fn run_scale_suite(title: &str, count: usize, path_str: &str, ram_mb: f64, ram_d
     let mut load_samples = Vec::with_capacity(10);
     for _ in 0..10 {
         let t0 = Instant::now();
-        let arena = black_box(read_arena(path, None).expect("Failed to load arena"));
+        let arena = black_box(Arena::load(path, None).expect("Failed to load arena"));
         let elapsed = t0.elapsed();
         assert_eq!(arena.len(), count);
         load_samples.push(elapsed);
@@ -216,10 +216,8 @@ fn run_scale_suite(title: &str, count: usize, path_str: &str, ram_mb: f64, ram_d
     println!("- Heap Allocations: 1 flat PrimaryBuffer slab (0 String allocations in heap)");
     println!();
 
-    // Prepare arena & indices for queries
-    let arena = read_arena(path, None).unwrap();
-    let indices: Vec<usize> = (0..arena.len()).collect();
-    let engine = MatchEngine::new();
+    // Prepare arena for queries
+    let arena = Arena::load(path, None).expect("Failed to load arena for query suite");
 
     println!("## Search Latency Across N = 100 Runs");
     println!(
@@ -233,23 +231,18 @@ fn run_scale_suite(title: &str, count: usize, path_str: &str, ram_mb: f64, ram_d
     );
 
     let queries = [
-        ("^git", Some(100), "Prefix Register Match ('^git')"),
-        (
-            "cargo test",
-            Some(100),
-            "Multi-Word Contiguous ('cargo test')",
-        ),
+        ("^git", "Prefix Fast Match ('^git')"),
+        ("cargo test", "Multi-Word Contiguous ('cargo test')"),
         (
             "build release",
-            Some(100),
             "Multi-Word Non-Contiguous ('build release')",
         ),
-        ("status", Some(100), "Substring Fuzzy Match ('status')"),
-        ("cargo test", None, "Full Unbounded Search ('cargo test')"),
+        ("'status", "Substring Exact Match (''status')"),
+        ("status", "Fuzzy Ranked Match ('status')"),
     ];
 
-    for (query, limit, label) in queries {
-        let (stats, matches) = benchmark_query(&engine, &arena, &indices, query, limit);
+    for (query, label) in queries {
+        let (stats, matches) = benchmark_query(&arena, query);
         let sla_status = if stats.p95.as_secs_f64() < 0.00833 {
             "\x1b[1;32mPASS (120Hz)\x1b[0m"
         } else if stats.p95.as_secs_f64() < 0.01666 {

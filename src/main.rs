@@ -573,6 +573,7 @@ fn print_help() {
         "Minimalist Unix shell history engine\n\n\
 Usage: xstory [OPTIONS] [QUERY] [COMMAND]\n\n\
 Commands:\n  \
+  search   Interactive fuzzy search picker (default)\n  \
   history  Import or export history logs\n  \
   record   Record command execution into history log\n  \
   init     Initialize shell integration hook\n\n\
@@ -582,6 +583,7 @@ Options:\n  \
   -H, --history <PATH>   Path to history file\n  \
   -s, --scope <SCOPE>    Search scope (global/local)\n  \
   -p, --preview <MODE>   Preview mode (dynamic/fixed)\n  \
+  -t, --theme <THEME>    Syntax theme (dark/light/catppuccin/tokyo-night/gruvbox/nord/cake)\n  \
   -h, --help             Print help\n  \
   -V, --version          Print version\n"
     );

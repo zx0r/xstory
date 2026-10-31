@@ -42,6 +42,14 @@ e2e:
 bench *args:
     cargo bench {{ args }}
 
+# Run scale benchmark suite (500k records, 120Hz SLA verification)
+bench-scale:
+    cargo bench --bench bench_scale
+
+# Run comparative system benchmark against Atuin (size, SLOC, RSS, hardware counters)
+bench-system:
+    python3 scripts/benchmark.py
+
 # Run source-based LLVM coverage suite
 cov:
     @mkdir -p {{ target_dir }}/llvm-cov
