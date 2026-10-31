@@ -43,9 +43,11 @@ bench *args:
     cargo bench {{ args }}
 
 # Run source-based LLVM coverage suite
-coverage:
+cov:
     @mkdir -p {{ target_dir }}/llvm-cov
     cargo llvm-cov nextest --profile ci --lcov --output-path {{ target_dir }}/llvm-cov/lcov.info
+
+coverage: cov
 
 # Continuous background compilation & testing
 watch:
@@ -68,6 +70,10 @@ release:
 # Run local cargo-dist release packaging dry run
 dist-plan:
     dist plan
+
+# Run automated media assets pipeline (4K banner + video + GIF)
+assets *args:
+    ./scripts/build-demo.sh {{ args }}
 
 # ==============================================================================
 # Domain 3: DevSecOps, Supply Chain & Workflows
