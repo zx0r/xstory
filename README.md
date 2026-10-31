@@ -17,10 +17,6 @@
   <img src="assets/images/xstory-banner.jpg" alt="xstory banner" style="border-radius: 8px; max-width: 100%;" />
 </p>
 
-<h3 align="center">
-  Unix shell history engine & interactive picker
-</h3>
-
 <p align="center">
   <a href="https://github.com/user-attachments/assets/808dbcbd-fad3-43f3-a6c9-788406c55331">
     <img src="assets/gif/xstory-preview.gif" alt="xstory demo — sub-millisecond shell history fuzzy search and preview" style="border-radius: 8px; max-width: 100%;" />
@@ -61,11 +57,11 @@ xstory init fish | source
 
 ### Architecture
 
-- **Columnar Memory-Mapped Arena**: Reads `history.tsv` via `mmap(2)` into a columnar memory layout without heap-allocating command strings during loading.
-- **16-Byte `ByteView` Descriptors**: Inline storage for commands $\le$ 12 bytes (`prefix[4] ++ data[8]`), out-of-line buffer offsets for longer entries.
-- **64-Bit Bitmask Pruning**: O(1) early rejection of non-matching entries prior to scoring.
-- **Reverse-Chronological Deduplication**: Flat FNV-1a hash map over unique commands; newer invocations unconditionally win.
-- **In-Thread Syntax Highlighting**: Tree-sitter Bash parser running in-process with LRU caching — zero external subprocess spawns per frame.
+- **Memory-mapped history**: the file is mapped into memory directly; commands without escape sequences are read zero-copy.
+- **Compact command storage**: short commands (≤ 12 bytes) live inline in a 16-byte descriptor; longer ones reference the mapped file.
+- **Bitmask pre-filter**: each candidate is rejected in a single bitwise check before scoring runs.
+- **Newest-wins dedup**: duplicate commands are collapsed on load; only the most recent invocation survives.
+- **Built-in syntax highlighting**: tree-sitter Bash parser runs in-process with a slot cache; no external processes.
 
 ---
 
@@ -83,7 +79,7 @@ Layout uses a 3-panel stacked hierarchy: `History` $\rightarrow$ `Preview` $\rig
 | `Shift+Down` | Any | Directional focus step downward (`History` $\rightarrow$ `Preview` $\rightarrow$ `Query`) |
 | `Up` / `Down` | `History` focused | Navigate selection (bottom-up reverse-chronological) |
 | `Up` / `Down` | `Preview` focused | Scroll code lines inside the preview pane |
-| `Left` / `Right` | `Query` focused | Move cursor in query line |
+| `Left` / `Right` | Any | Move cursor in query line (switches focus to `Query`) |
 | `Ctrl+U` | `Query` focused | Delete query to start of line |
 | `Esc` / `Ctrl+C` | Any | Abort and return to shell prompt unchanged (exit code `130`) |
 
@@ -102,13 +98,13 @@ Layout uses a 3-panel stacked hierarchy: `History` $\rightarrow$ `Preview` $\rig
 
 ### Configuration
 
-Path: `~/.config/xstory/config` (or `$XDG_CONFIG_HOME/xstory/config`).
-
 ```toml
+# [OPTIONAL] Path: '~/.config/xstory/config'
+
 history_path = "~/.local/share/xstory/history.tsv"
 scroll_off = 4
-preview_mode = "fixed" # "fixed" | "dynamic"
-theme = "dark"         # "dark" | "light" | "catppuccin" | "tokyo-night" | "gruvbox" | "nord" | "cake"
+preview_mode = "fixed" # OR "dynamic"
+theme = "dark" # OR "light" | "catppuccin" | "tokyo-night" | "gruvbox" | "nord" | "cake"
 ```
 
 CLI flags override config values:
@@ -130,8 +126,8 @@ xstory [QUERY]
 xstory search -q "docker compose"
 
 # Ingest execution log entry (invoked by shell hook)
-xstory record --exit=0 --duration=145 --cwd="$PWD" -- git status
-printf 'multiline command' | xstory record --stdin --exit=1 --duration=2000
+xstory record --exit=0 --duration=50 --cwd="$PWD" -- git status
+printf 'multiline command' | xstory record --stdin --cwd="$PWD" --exit=0 --duration=50
 
 # Import existing shell history file
 xstory history import ~/.zsh_history
@@ -142,7 +138,7 @@ xstory history export > history.tsv
 
 ---
 
-#### [ x s t o r y ]
+### [ x s t o r y ]
 
 <p align="center">
   <img src="./assets/gif/xstory-crab.gif" width="360" height="" alt="xstory" />
@@ -158,8 +154,6 @@ xstory [QUERY]
 
 you run commands → we index them instantly
 you switch directories → we scope history without delay
-
-that's it... happy shell history...
 ```
 
 ---

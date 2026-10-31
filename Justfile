@@ -46,6 +46,10 @@ bench *args:
 bench-scale:
     cargo bench --bench bench_scale
 
+# Run comparative stress benchmark: xstory vs Atuin (100k/500k/1M, zero hardcode)
+bench-comparative:
+    cargo bench --bench bench_comparative
+
 # Run comparative system benchmark against Atuin (size, SLOC, RSS, hardware counters)
 bench-system:
     python3 scripts/benchmark.py

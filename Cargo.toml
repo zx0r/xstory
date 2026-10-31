@@ -54,6 +54,10 @@ harness = false
 name = "bench_scale"
 harness = false
 
+[[bench]]
+name = "bench_comparative"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = "fat"
