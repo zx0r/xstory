@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.5] - 2026-10-31
 
 ### Fixed
-- Added `-h` and `--help` flag support across all subcommands (`init -h`, `search -h`, `record -h`, `history -h`).
+- Replaced generic top-level help stub with dedicated context-specific help screens and usage specifications across all subcommands (`init -h`, `search -h`, `record -h`, `history -h`).
+- Added `-h` and `--help` flag support for `init` shell integration subcommand.
 
 ## [0.1.4] - 2026-10-31
 
