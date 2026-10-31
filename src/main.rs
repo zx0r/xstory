@@ -287,7 +287,7 @@ enum Action {
     HistoryExport {
         path: Option<String>,
     },
-    Help,
+    Help(Option<&'static str>),
     Version,
 }
 
@@ -321,7 +321,7 @@ fn parse_record_args(args: &[String]) -> Action {
         } else if a == "--" {
             dd = true;
         } else if a == "-h" || a == "--help" {
-            return Action::Help;
+            return Action::Help(Some("record"));
         } else if a == "--stdin" {
             from_stdin = true;
         } else if let Some(v) = a.strip_prefix("--exit=") {
@@ -384,7 +384,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
                 scope,
                 preview,
                 theme,
-                action: Action::Help,
+                action: Action::Help(None),
             });
         } else if arg == "-v" || arg == "-V" || arg == "--version" {
             return Ok(Cli {
@@ -486,7 +486,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
                 Some("export") => Action::HistoryExport {
                     path: extra.map(str::to_owned),
                 },
-                Some("-h" | "--help") => Action::Help,
+                Some("-h" | "--help") => Action::Help(Some("history")),
                 _ => {
                     return Err(Error::InvalidArgs(
                         "usage: xstory history <import|export> [path]",
@@ -498,7 +498,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
             Some(s @ ("bash" | "zsh" | "fish")) => Action::Init {
                 shell: s.to_owned(),
             },
-            Some("-h" | "--help") => Action::Help,
+            Some("-h" | "--help") => Action::Help(Some("init")),
             Some(_) => {
                 return Err(Error::InvalidArgs(
                     "unsupported shell (supported: bash, zsh, fish)",
@@ -523,7 +523,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
                         scope,
                         preview,
                         theme,
-                        action: Action::Help,
+                        action: Action::Help(Some("search")),
                     });
                 } else if let Some(val) = a.strip_prefix("--query=") {
                     q = Some(val.to_owned());
@@ -579,9 +579,63 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
     })
 }
 
-fn print_help() {
-    print!(
-        "Minimalist Unix shell history engine\n\n\
+fn print_help(topic: Option<&str>) {
+    match topic {
+        Some("init") => {
+            print!(
+                "Initialize shell integration hook\n\n\
+Usage: xstory init <SHELL>\n\n\
+Arguments:\n  \
+  <SHELL>  Target shell environment (supported: bash, zsh, fish)\n\n\
+Options:\n  \
+  -h, --help  Print help\n"
+            );
+        }
+        Some("history") => {
+            print!(
+                "Import or export history logs\n\n\
+Usage: xstory history <COMMAND> [PATH]\n\n\
+Commands:\n  \
+  import  Import history from external shell history file (zsh, bash, fish)\n  \
+  export  Export deduplicated history database to TSV\n\n\
+Arguments:\n  \
+  [PATH]  Target file path for import or export\n\n\
+Options:\n  \
+  -h, --help  Print help\n"
+            );
+        }
+        Some("record") => {
+            print!(
+                "Record command execution into history log\n\n\
+Usage: xstory record [OPTIONS] [--] <COMMAND>...\n\n\
+Arguments:\n  \
+  <COMMAND>...  Executed command line (or pass via stdin with --stdin)\n\n\
+Options:\n  \
+      --exit <CODE>       Process exit code (default: 0)\n  \
+      --duration <MS>     Execution duration in milliseconds (default: 0)\n  \
+      --cwd <PATH>        Working directory (default: current directory)\n  \
+      --stdin             Read command string from standard input\n  \
+  -h, --help              Print help\n"
+            );
+        }
+        Some("search") => {
+            print!(
+                "Interactive fuzzy search picker (default)\n\n\
+Usage: xstory search [OPTIONS] [QUERY]\n\n\
+Arguments:\n  \
+  [QUERY]  Initial search query\n\n\
+Options:\n  \
+  -q, --query <QUERY>    Initial search query\n  \
+  -s, --scope <SCOPE>    Search scope (global/local)\n  \
+  -p, --preview <MODE>   Preview mode (dynamic/fixed)\n  \
+  -t, --theme <THEME>    Syntax theme (dark/light/catppuccin/tokyo-night/gruvbox/nord/cake)\n  \
+  -H, --history <PATH>   Path to history file\n  \
+  -h, --help             Print help\n"
+            );
+        }
+        _ => {
+            print!(
+                "Minimalist Unix shell history engine\n\n\
 Usage: xstory [OPTIONS] [QUERY] [COMMAND]\n\n\
 Commands:\n  \
   search   Interactive fuzzy search picker (default)\n  \
@@ -597,7 +651,9 @@ Options:\n  \
   -t, --theme <THEME>    Syntax theme (dark/light/catppuccin/tokyo-night/gruvbox/nord/cake)\n  \
   -h, --help             Print help\n  \
   -V, --version          Print version\n"
-    );
+            );
+        }
+    }
 }
 
 // ── Main Entrypoint ──────────────────────────────────────────────
@@ -613,8 +669,8 @@ fn run() -> Result<(), Error> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cli = parse_args(&args)?;
     match cli.action {
-        Action::Help => {
-            print_help();
+        Action::Help(topic) => {
+            print_help(topic);
             Ok(())
         }
         Action::Version => {
@@ -716,7 +772,7 @@ fn execute(
             }
             std::process::exit(code);
         }
-        Action::Help | Action::Version | Action::Init { .. } => unreachable!(),
+        Action::Help(_) | Action::Version | Action::Init { .. } => unreachable!(),
     }
 }
 
@@ -730,22 +786,22 @@ mod tests {
     #[test]
     fn parse_help_version() {
         assert!(
-            matches!(parse_args(&["--help".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+            matches!(parse_args(&["--help".into()]), Ok(cli) if matches!(cli.action, Action::Help(None)))
         );
         assert!(
-            matches!(parse_args(&["-h".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+            matches!(parse_args(&["-h".into()]), Ok(cli) if matches!(cli.action, Action::Help(None)))
         );
         assert!(
-            matches!(parse_args(&["init".into(), "-h".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+            matches!(parse_args(&["init".into(), "-h".into()]), Ok(cli) if matches!(cli.action, Action::Help(Some("init"))))
         );
         assert!(
-            matches!(parse_args(&["search".into(), "--help".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+            matches!(parse_args(&["search".into(), "--help".into()]), Ok(cli) if matches!(cli.action, Action::Help(Some("search"))))
         );
         assert!(
-            matches!(parse_args(&["record".into(), "-h".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+            matches!(parse_args(&["record".into(), "-h".into()]), Ok(cli) if matches!(cli.action, Action::Help(Some("record"))))
         );
         assert!(
-            matches!(parse_args(&["history".into(), "-h".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+            matches!(parse_args(&["history".into(), "-h".into()]), Ok(cli) if matches!(cli.action, Action::Help(Some("history"))))
         );
         assert!(
             matches!(parse_args(&["--version".into()]), Ok(cli) if matches!(cli.action, Action::Version))
