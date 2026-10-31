@@ -18,6 +18,65 @@ const SAMPLES: usize = 100;
 const WARMUP: usize = 10;
 const PATH_500K: &str = "/tmp/xstory_500k.tsv";
 
+const TEMPLATES: &[(&str, &str, i32)] = &[
+    ("git status", "/Users/x0r/x/dev/own/xstory", 1),
+    (
+        "cargo test --workspace --all-targets",
+        "/Users/x0r/.config/xstory",
+        0,
+    ),
+    (
+        "docker compose -f docker-compose.yml up -d",
+        "/Users/x0r/x/dev/work/backend",
+        0,
+    ),
+    (
+        "kubectl get pods -n kube-system -o wide",
+        "/Users/x0r/x/infra/k8s-cluster",
+        0,
+    ),
+    ("nvim src/main.rs", "/Users/x0r/Downloads", 0),
+    (
+        "git commit -m \"fix: resolve edge case in parser pipeline\"",
+        "/Users/x0r/x/dev/own/xstory",
+        0,
+    ),
+    (
+        "curl -sSL https://api.github.com/repos/zx0r/xstory | jq .stargazers_count",
+        "/Users/x0r/.config/xstory",
+        0,
+    ),
+    (
+        "cargo clippy --all-targets --all-features -- -D warnings",
+        "/Users/x0r/x/dev/work/backend",
+        0,
+    ),
+    (
+        "ssh -i ~/.ssh/id_ed25519 root@192.168.1.100",
+        "/Users/x0r/x/infra/k8s-cluster",
+        0,
+    ),
+    (
+        "find . -name \"*.rs\" -not -path \"./target/*\" | xargs wc -l",
+        "/Users/x0r/Downloads",
+        0,
+    ),
+    ("git diff HEAD~1", "/Users/x0r/x/dev/own/xstory", 0),
+    ("cargo build --release", "/Users/x0r/.config/xstory", 0),
+    ("ls -la /var/log", "/var/log", 0),
+    ("cd ~/dev/own/xstory", "/Users/x0r", 0),
+    (
+        "git pull --rebase origin main",
+        "/Users/x0r/x/dev/own/xstory",
+        0,
+    ),
+    ("htop", "/Users/x0r", 0),
+    ("ps aux | grep rust", "/Users/x0r", 0),
+    ("cat /etc/hosts", "/etc", 0),
+    ("make test", "/Users/x0r/x/dev/work/backend", 2),
+    ("git log --oneline -n 20", "/Users/x0r/x/dev/own/xstory", 0),
+];
+
 fn ensure_dataset(path: &Path, count: usize) {
     let min_bytes = (count as u64 * 80).min(75_000_000);
     if let Ok(metadata) = std::fs::metadata(path)
@@ -34,68 +93,9 @@ fn ensure_dataset(path: &Path, count: usize) {
     let file = File::create(path).expect("Failed to create dataset file");
     let mut writer = BufWriter::with_capacity(16 * 1024 * 1024, file);
 
-    let templates = [
-        ("git status", "/Users/x0r/x/dev/own/xstory", 1),
-        (
-            "cargo test --workspace --all-targets",
-            "/Users/x0r/.config/xstory",
-            0,
-        ),
-        (
-            "docker compose -f docker-compose.yml up -d",
-            "/Users/x0r/x/dev/work/backend",
-            0,
-        ),
-        (
-            "kubectl get pods -n kube-system -o wide",
-            "/Users/x0r/x/infra/k8s-cluster",
-            0,
-        ),
-        ("nvim src/main.rs", "/Users/x0r/Downloads", 0),
-        (
-            "git commit -m \"fix: resolve edge case in parser pipeline\"",
-            "/Users/x0r/x/dev/own/xstory",
-            0,
-        ),
-        (
-            "curl -sSL https://api.github.com/repos/zx0r/xstory | jq .stargazers_count",
-            "/Users/x0r/.config/xstory",
-            0,
-        ),
-        (
-            "cargo clippy --all-targets --all-features -- -D warnings",
-            "/Users/x0r/x/dev/work/backend",
-            0,
-        ),
-        (
-            "ssh -i ~/.ssh/id_ed25519 root@192.168.1.100",
-            "/Users/x0r/x/infra/k8s-cluster",
-            0,
-        ),
-        (
-            "find . -name \"*.rs\" -not -path \"./target/*\" | xargs wc -l",
-            "/Users/x0r/Downloads",
-            0,
-        ),
-        ("git diff HEAD~1", "/Users/x0r/x/dev/own/xstory", 0),
-        ("cargo build --release", "/Users/x0r/.config/xstory", 0),
-        ("ls -la /var/log", "/var/log", 0),
-        ("cd ~/dev/own/xstory", "/Users/x0r", 0),
-        (
-            "git pull --rebase origin main",
-            "/Users/x0r/x/dev/own/xstory",
-            0,
-        ),
-        ("htop", "/Users/x0r", 0),
-        ("ps aux | grep rust", "/Users/x0r", 0),
-        ("cat /etc/hosts", "/etc", 0),
-        ("make test", "/Users/x0r/x/dev/work/backend", 2),
-        ("git log --oneline -n 20", "/Users/x0r/x/dev/own/xstory", 0),
-    ];
-
     let base_ts = 1_710_000_000_000i64;
     for i in 0..count {
-        let (cmd, cwd, code) = templates[i % templates.len()];
+        let (cmd, cwd, code) = TEMPLATES[i % TEMPLATES.len()];
         let ts = base_ts + (i as i64 * 1000);
         let duration = (i % 400) as u32;
         writeln!(writer, "{ts}\t{duration}\t{code}\t{cwd}\t{cmd} --iter={i}")
@@ -104,9 +104,7 @@ fn ensure_dataset(path: &Path, count: usize) {
 
     writer.flush().expect("Failed to flush TSV writer");
     let elapsed = t0.elapsed();
-    let size_mb = std::fs::metadata(path)
-        .map(|m| m.len() as f64 / 1_000_000.0)
-        .unwrap_or(0.0);
+    let size_mb = std::fs::metadata(path).map_or(0.0, |m| m.len() as f64 / 1_000_000.0);
     println!("Generated {count} dataset: {size_mb:.2} MB in {elapsed:.2?}\n");
 }
 
@@ -129,7 +127,7 @@ fn compute_stats(mut samples: Vec<Duration>) -> Stats {
     let p95 = samples[(samples.len() as f64 * 0.95) as usize];
     let p99 = samples[(samples.len() as f64 * 0.99).min((samples.len() - 1) as f64) as usize];
 
-    let total_nanos: u128 = samples.iter().map(|s| s.as_nanos()).sum();
+    let total_nanos: u128 = samples.iter().map(Duration::as_nanos).sum();
     let mean_nanos = total_nanos / samples.len() as u128;
     let mean = Duration::from_nanos(mean_nanos as u64);
 
@@ -191,7 +189,7 @@ fn run_scale_suite(title: &str, count: usize, path_str: &str, ram_mb: f64, ram_d
 
     // Ingestion benchmark (10 repeated warm iterations)
     print!("Profiling Ingestion ({file_mb:.1} MB mmap + SIMD parallel parser)... ");
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush().expect("flush stdout");
     let mut load_samples = Vec::with_capacity(10);
     for _ in 0..10 {
         let t0 = Instant::now();
@@ -237,7 +235,6 @@ fn run_scale_suite(title: &str, count: usize, path_str: &str, ram_mb: f64, ram_d
             "build release",
             "Multi-Word Non-Contiguous ('build release')",
         ),
-        ("'status", "Substring Exact Match (''status')"),
         ("status", "Fuzzy Ranked Match ('status')"),
     ];
 

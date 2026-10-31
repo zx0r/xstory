@@ -63,7 +63,4 @@ config.toml
 # =========================
 # Specifications & Task drafts
 # =========================
-spec/
-.specs/
-
-
+specs/

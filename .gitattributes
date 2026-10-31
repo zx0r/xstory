@@ -37,10 +37,9 @@ dist-workspace.toml -linguist-detectable
 
 # --- Scripts & Automation ---
 # Exclude shell and automation scripts from language stats to keep repository 100% Rust.
-scripts/** -linguist-detectable
 scripts/** linguist-documentation
-*.sh -linguist-detectable
-*.sh linguist-documentation
+build-demo.sh linguist-documentation
+benchmark.py linguist-documentation
 
 # --- Shell Completions ---
 assets/completions/** linguist-documentation
