@@ -35,6 +35,13 @@ dist-workspace.toml -linguist-detectable
 .gemini/** -linguist-detectable
 .serena/** -linguist-detectable
 
+# --- Scripts & Automation ---
+# Exclude shell and automation scripts from language stats to keep repository 100% Rust.
+scripts/** -linguist-detectable
+scripts/** linguist-documentation
+*.sh -linguist-detectable
+*.sh linguist-documentation
+
 # --- Shell Completions ---
 assets/completions/** linguist-documentation
 
