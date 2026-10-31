@@ -320,6 +320,8 @@ fn parse_record_args(args: &[String]) -> Action {
             pos.push(a.clone());
         } else if a == "--" {
             dd = true;
+        } else if a == "-h" || a == "--help" {
+            return Action::Help;
         } else if a == "--stdin" {
             from_stdin = true;
         } else if let Some(v) = a.strip_prefix("--exit=") {
@@ -496,6 +498,7 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
             Some(s @ ("bash" | "zsh" | "fish")) => Action::Init {
                 shell: s.to_owned(),
             },
+            Some("-h" | "--help") => Action::Help,
             Some(_) => {
                 return Err(Error::InvalidArgs(
                     "unsupported shell (supported: bash, zsh, fish)",
@@ -514,7 +517,15 @@ fn parse_args(args: &[String]) -> Result<Cli, Error> {
         "search" => {
             let (mut q, mut iter) = (None, rest[1..].iter());
             while let Some(a) = iter.next() {
-                if let Some(val) = a.strip_prefix("--query=") {
+                if a == "-h" || a == "--help" {
+                    return Ok(Cli {
+                        history_path,
+                        scope,
+                        preview,
+                        theme,
+                        action: Action::Help,
+                    });
+                } else if let Some(val) = a.strip_prefix("--query=") {
                     q = Some(val.to_owned());
                 } else if a == "--query" || a == "-q" {
                     q = iter.next().cloned();
@@ -723,6 +734,18 @@ mod tests {
         );
         assert!(
             matches!(parse_args(&["-h".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+        );
+        assert!(
+            matches!(parse_args(&["init".into(), "-h".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+        );
+        assert!(
+            matches!(parse_args(&["search".into(), "--help".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+        );
+        assert!(
+            matches!(parse_args(&["record".into(), "-h".into()]), Ok(cli) if matches!(cli.action, Action::Help))
+        );
+        assert!(
+            matches!(parse_args(&["history".into(), "-h".into()]), Ok(cli) if matches!(cli.action, Action::Help))
         );
         assert!(
             matches!(parse_args(&["--version".into()]), Ok(cli) if matches!(cli.action, Action::Version))
