@@ -55,6 +55,25 @@ xstory init fish | source
 ```
 ---
 
+### Manifest
+
+The xstory Unix-style approach:
+
+- **Core**: Ultra-fast, deterministic local engine (utilizing zero-copy `mmap`, `O_APPEND` for TSV files, and sub-1ms lookups). 
+- **Synchronization**: Achieved by composing standard Unix utilities to operate on the `history.tsv` storage format. 
+
+Since the xstory data store is simply a flat text file (`history.tsv`), there is no need for custom synchronization code within the Rust binary itself! Git already handles diffs, merges, SSH authentication, signed commits, and remote repository interactions better than any built-in library could.
+
+#### Remote Synchronization: The Unix Paradigm
+
+Unlike monolithic solutions that bundle background HTTP/gRPC daemons, database locks, and proprietary sync servers into your shell prompt, `xstory` follows the **Unix single-responsibility principle**:
+
+1. **Format as Interface**: All history is stored in a clean, newline-delimited TSV (`history.tsv`) with atomic append guarantees.
+2. **Zero In-Process Network Bloat**: `xstory` never initiates network sockets, keeping memory footprints low (< 5 MB) and execution deterministic.
+3. **Native Git & Fleet Orchestration**: Multi-machine history synchronization is handled out-of-band via Git, cron/systemd timers, or dotfile managers (`git-crypt`, `sops`, `age`).
+
+---
+
 ### Architecture
 
 - **Memory-mapped history**: the file is mapped into memory directly; commands without escape sequences are read zero-copy.
