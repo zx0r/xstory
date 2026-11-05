@@ -40,7 +40,7 @@ installers = [
 install-path = ["$CARGO_HOME/bin", "~/.local/bin"]
 
 # Companion in-place auto-updater (<bin>-update binary)
-install-updater = true
+install-updater = false
 
 # Archive Compression
 unix-archive = ".tar.gz"
