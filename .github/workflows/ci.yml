@@ -251,8 +251,8 @@ jobs:
   # ----------------------------------------------------------------------------
   # Gate 4: Memory Model Verification & Undefined Behavior (Miri)
   # ----------------------------------------------------------------------------
-  # Purpose: Executes unit tests under the Miri interpreter with Tree Borrows aliasing,
-  # symbolic pointer alignment checks, and strict provenance enforcement
+  # Purpose: Executes unit tests under the Miri interpreter with Tree Borrows aliasing
+  # and strict provenance enforcement
   miri-verification:
     name: "🔬 [Gate 4] Memory Safety & Tree Borrows (Miri)"
     needs: ["fast-checks"]
@@ -292,6 +292,7 @@ jobs:
       # - -Zmiri-strict-provenance: Detects integer-to-pointer casting violations
       - name: "Run Miri Memory Safety Verification"
         env:
+          RUST_BACKTRACE: "1"
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-tree-borrows -Zmiri-strict-provenance"
         run: "cargo miri test --locked --workspace --lib"
 
